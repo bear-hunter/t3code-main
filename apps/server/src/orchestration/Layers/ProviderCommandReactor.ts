@@ -563,6 +563,9 @@ const make = Effect.gen(function* () {
         ...(effectiveCwd ? { cwd: effectiveCwd } : {}),
         modelSelection: desiredModelSelection,
         ...(input?.resumeCursor !== undefined ? { resumeCursor: input.resumeCursor } : {}),
+        // Sidechats fork their parent's native session on first start when
+        // the adapter supports it (see ProviderService.startSession).
+        ...(thread.parentThreadId != null ? { parentThreadId: thread.parentThreadId } : {}),
         runtimeMode: desiredRuntimeMode,
       });
 

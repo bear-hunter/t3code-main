@@ -1,3 +1,5 @@
+import { scopeThreadRef } from "@t3tools/client-runtime/environment";
+import type { ThreadId } from "@t3tools/contracts";
 import { createFileRoute, useNavigate } from "@tanstack/react-router";
 import { useEffect } from "react";
 
@@ -21,12 +23,31 @@ function ChatThreadRouteView() {
   const threadRef = Route.useParams({
     select: (params) => resolveThreadRouteRef(params),
   });
+  const sidechatSearchParam = Route.useSearch({ select: (search) => search.sidechat ?? null });
   const shell = useEnvironmentQuery(
     threadRef === null ? null : environmentShell.stateAtom(threadRef.environmentId),
   );
   const serverThreadShell = useThreadShell(threadRef);
   const serverThreadDetail = useThreadDetail(threadRef);
   const serverThreadStatus = useThreadStatus(threadRef);
+  // ?sidechat= selects which tab of the routed thread is displayed. The param
+  // only takes effect once the referenced thread is a live sidechat of the
+  // routed thread; until then (or if it never is) the Main tab renders, so a
+  // stale or foreign id degrades gracefully instead of erroring.
+  const requestedSidechatRef =
+    threadRef && sidechatSearchParam
+      ? scopeThreadRef(threadRef.environmentId, sidechatSearchParam as ThreadId)
+      : null;
+  const requestedSidechatShell = useThreadShell(requestedSidechatRef);
+  const displayedThreadRef =
+    requestedSidechatRef &&
+    threadRef &&
+    requestedSidechatShell?.parentThreadId === threadRef.threadId
+      ? requestedSidechatRef
+      : threadRef;
+  const displayedThreadShell = useThreadShell(displayedThreadRef);
+  const displayedThreadDetail = useThreadDetail(displayedThreadRef);
+  const displayedThreadStatus = useThreadStatus(displayedThreadRef);
   const environmentThreadRefs = useEnvironmentThreadRefs(threadRef?.environmentId ?? null);
   const bootstrapComplete = shell.data?.snapshot._tag === "Some";
   const environmentHasServerThreads = environmentThreadRefs.length > 0;
@@ -50,9 +71,9 @@ function ChatThreadRouteView() {
     draftThreadExists,
   });
   const threadSyncPhase = resolveThreadSyncPhase({
-    detailExists: serverThreadDetail !== null,
-    shellExists: serverThreadShell !== null,
-    status: serverThreadStatus,
+    detailExists: displayedThreadDetail !== null,
+    shellExists: displayedThreadShell !== null,
+    status: displayedThreadStatus,
   });
   const serverThreadStarted = threadHasStarted(serverThreadDetail);
   const environmentHasAnyThreads = environmentHasServerThreads || environmentHasDraftThreads;
@@ -74,7 +95,7 @@ function ChatThreadRouteView() {
     finalizePromotedDraftThreadByRef(threadRef);
   }, [draftThread, serverThreadStarted, threadRef]);
 
-  if (!threadRef) {
+  if (!threadRef || !displayedThreadRef) {
     return null;
   }
 
@@ -83,7 +104,8 @@ function ChatThreadRouteView() {
       {renderState === "ready" || (renderState === "loading" && serverThreadShell !== null) ? (
         <ChatView
           environmentId={threadRef.environmentId}
-          threadId={threadRef.threadId}
+          threadId={displayedThreadRef.threadId}
+          sidechatParentThreadId={threadRef.threadId}
           routeKind="server"
           threadSyncPhase={threadSyncPhase}
         />
@@ -94,4 +116,11 @@ function ChatThreadRouteView() {
 
 export const Route = createFileRoute("/_chat/$environmentId/$threadId")({
   component: ChatThreadRouteView,
+  validateSearch: (search: Record<string, unknown>): { sidechat?: string } => {
+    const sidechat =
+      typeof search.sidechat === "string" && search.sidechat.trim().length > 0
+        ? search.sidechat
+        : undefined;
+    return sidechat !== undefined ? { sidechat } : {};
+  },
 });

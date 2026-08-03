@@ -3171,6 +3171,13 @@ export const makeClaudeAdapter = Effect.fn("makeClaudeAdapter")(function* (
       const resumeState = readClaudeResumeState(input.resumeCursor);
       const threadId = input.threadId;
       const existingResumeSessionId = resumeState?.resume;
+      // Sidechat fork: with no own session to resume, branch the parent's
+      // session under a freshly minted id. The SDK's forkSession flag makes
+      // `resume` copy-on-write, so the parent session is never written to.
+      const forkFromSessionId =
+        existingResumeSessionId === undefined
+          ? readClaudeResumeState(input.forkFromResumeCursor)?.resume
+          : undefined;
       const newSessionId = existingResumeSessionId === undefined ? yield* randomUUIDv4 : undefined;
       const sessionId = existingResumeSessionId ?? newSessionId;
 
@@ -3541,6 +3548,7 @@ export const makeClaudeAdapter = Effect.fn("makeClaudeAdapter")(function* (
         ...(Object.keys(settings).length > 0 ? { settings } : {}),
         ...(existingResumeSessionId ? { resume: existingResumeSessionId } : {}),
         ...(newSessionId ? { sessionId: newSessionId } : {}),
+        ...(forkFromSessionId ? { resume: forkFromSessionId, forkSession: true } : {}),
         includePartialMessages: true,
         canUseTool,
         env: claudeEnvironment,
@@ -3566,7 +3574,12 @@ export const makeClaudeAdapter = Effect.fn("makeClaudeAdapter")(function* (
         "provider.thread_id": threadId,
         "provider.runtime_mode": input.runtimeMode,
         "claude.resume.source":
-          existingResumeSessionId !== undefined ? "resume-session" : "generated-session",
+          existingResumeSessionId !== undefined
+            ? "resume-session"
+            : forkFromSessionId !== undefined
+              ? "fork-session"
+              : "generated-session",
+        "claude.query.fork_from": forkFromSessionId ?? "",
         "claude.resume.thread_id": resumeState?.threadId ?? "",
         "claude.resume.session_id": existingResumeSessionId ?? "",
         "claude.resume.session_at": resumeState?.resumeSessionAt ?? "",
@@ -3932,6 +3945,7 @@ export const makeClaudeAdapter = Effect.fn("makeClaudeAdapter")(function* (
     provider: PROVIDER,
     capabilities: {
       sessionModelSwitch: "in-session",
+      sessionFork: "native",
     },
     startSession,
     sendTurn,

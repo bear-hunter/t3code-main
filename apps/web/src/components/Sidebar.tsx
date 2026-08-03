@@ -94,6 +94,7 @@ import {
   resolveProjectExpanded,
   useUiStateStore,
 } from "../uiStateStore";
+import { isSidechatHiddenFromThreadLists, useSidechatStore } from "../sidechatStore";
 import {
   resolveShortcutCommand,
   shortcutLabelForCommand,
@@ -1163,7 +1164,15 @@ const SidebarProjectItem = memo(function SidebarProjectItem(props: SidebarProjec
     },
   });
   const openPrLink = useOpenPrLink();
-  const sidebarThreads = useThreadShellsForProjectRefs(project.memberProjectRefs);
+  const projectThreadShells = useThreadShellsForProjectRefs(project.memberProjectRefs);
+  const promotedSidechatThreadKeys = useSidechatStore((store) => store.promotedThreadKeys);
+  const sidebarThreads = useMemo(
+    () =>
+      projectThreadShells.filter(
+        (thread) => !isSidechatHiddenFromThreadLists(thread, promotedSidechatThreadKeys),
+      ),
+    [projectThreadShells, promotedSidechatThreadKeys],
+  );
   const sidebarThreadByKey = useMemo(
     () =>
       new Map(
@@ -2988,7 +2997,17 @@ const SidebarProjectsContent = memo(function SidebarProjectsContent(
 
 export default function Sidebar() {
   const projects = useProjects();
-  const sidebarThreads = useThreadShells();
+  const allThreadShells = useThreadShells();
+  const promotedSidechatThreadKeys = useSidechatStore((store) => store.promotedThreadKeys);
+  // Sidechats stay out of the sidebar: they surface through their parent's
+  // tab strip (a promoted sidechat rejoins the list).
+  const sidebarThreads = useMemo(
+    () =>
+      allThreadShells.filter(
+        (thread) => !isSidechatHiddenFromThreadLists(thread, promotedSidechatThreadKeys),
+      ),
+    [allThreadShells, promotedSidechatThreadKeys],
+  );
   const projectExpandedById = useUiStateStore((store) => store.projectExpandedById);
   const projectOrder = useUiStateStore((store) => store.projectOrder);
   const reorderProjects = useUiStateStore((store) => store.reorderProjects);

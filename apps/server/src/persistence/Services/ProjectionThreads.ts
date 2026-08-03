@@ -9,6 +9,7 @@
 import {
   CommandId,
   IsoDateTime,
+  MessageId,
   ModelSelection,
   NonNegativeInt,
   ProjectId,
@@ -28,6 +29,8 @@ export const ProjectionThread = Schema.Struct({
   threadId: ThreadId,
   projectId: ProjectId,
   title: Schema.String,
+  parentThreadId: Schema.optional(Schema.NullOr(ThreadId)),
+  spawnedAtMessageId: Schema.optional(Schema.NullOr(MessageId)),
   modelSelection: ModelSelection,
   runtimeMode: RuntimeMode,
   interactionMode: ProviderInteractionMode,

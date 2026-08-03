@@ -570,6 +570,22 @@ const makeProviderService = Effect.fn("makeProviderService")(function* (
           (persistedBinding?.providerInstanceId === resolvedInstanceId
             ? readPersistedCwd(persistedBinding.runtimePayload)
             : undefined);
+        const adapter = yield* registry.getByInstance(resolvedInstanceId);
+        // A sidechat's first start (no own cursor yet) forks the parent's
+        // native session when the adapter supports it and the parent session
+        // lives on the same provider instance. The parent session is never
+        // written to — the adapter resumes it under a new session id.
+        const parentBinding =
+          effectiveResumeCursor === undefined &&
+          input.parentThreadId !== undefined &&
+          adapter.capabilities.sessionFork === "native"
+            ? Option.getOrUndefined(yield* directory.getBinding(input.parentThreadId))
+            : undefined;
+        const forkFromResumeCursor =
+          parentBinding?.providerInstanceId === resolvedInstanceId &&
+          parentBinding.resumeCursor != null
+            ? parentBinding.resumeCursor
+            : undefined;
         yield* Effect.annotateCurrentSpan({
           "provider.kind": resolvedProvider,
           "provider.resume_cursor.source":
@@ -580,6 +596,7 @@ const makeProviderService = Effect.fn("makeProviderService")(function* (
                 ? "persisted"
                 : "none",
           "provider.resume_cursor.present": effectiveResumeCursor !== undefined,
+          "provider.fork_from.present": forkFromResumeCursor !== undefined,
           "provider.cwd.source":
             input.cwd !== undefined
               ? "request"
@@ -589,7 +606,6 @@ const makeProviderService = Effect.fn("makeProviderService")(function* (
                 : "none",
           "provider.cwd.effective": effectiveCwd ?? "",
         });
-        const adapter = yield* registry.getByInstance(resolvedInstanceId);
         yield* prepareMcpSession(threadId, resolvedInstanceId);
         const session = yield* adapter
           .startSession({
@@ -597,6 +613,7 @@ const makeProviderService = Effect.fn("makeProviderService")(function* (
             providerInstanceId: resolvedInstanceId,
             ...(effectiveCwd !== undefined ? { cwd: effectiveCwd } : {}),
             ...(effectiveResumeCursor !== undefined ? { resumeCursor: effectiveResumeCursor } : {}),
+            ...(forkFromResumeCursor !== undefined ? { forkFromResumeCursor } : {}),
           })
           .pipe(Effect.onError(() => clearMcpSession(threadId)));
 

@@ -305,6 +305,8 @@ export const ThreadListV2Row = memo(function ThreadListV2Row(props: {
   readonly variant: "card" | "slim";
   /** Snoozed-shelf row: shows its wake time and offers Wake. */
   readonly snoozed?: boolean;
+  /** Sidechat row rendered under its parent thread: indented, slim idiom. */
+  readonly sidechat?: boolean;
   /** Preformatted against the parent minute tick so this memoized row's
       countdown keeps moving. */
   readonly snoozeWakeLabelText?: string;
@@ -722,7 +724,13 @@ export const ThreadListV2Row = memo(function ThreadListV2Row(props: {
         <View
           className={cn(
             "min-h-[44px] flex-row items-center gap-2.5 py-2",
-            sidebarPane ? "px-3" : "px-5",
+            sidebarPane
+              ? props.sidechat
+                ? "pl-7 pr-3"
+                : "px-3"
+              : props.sidechat
+                ? "pl-9 pr-5"
+                : "px-5",
           )}
         >
           {props.project ? (

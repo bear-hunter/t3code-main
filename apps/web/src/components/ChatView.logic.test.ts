@@ -26,6 +26,7 @@ import {
   reconcileRetainedMountedThreadIds,
   resolveThreadMetadataUpdateForNextTurn,
   resolveSendEnvMode,
+  shouldApplySidechatSeed,
   startNewThreadForProject,
   shouldShowBranchMismatchBanner,
   shouldWriteThreadErrorToCurrentServerThread,
@@ -676,5 +677,57 @@ describe("hasServerAcknowledgedLocalDispatch", () => {
     expect(hasServerAcknowledgedLocalDispatch({ ...common, hasPendingApproval: true })).toBe(true);
     expect(hasServerAcknowledgedLocalDispatch({ ...common, hasPendingUserInput: true })).toBe(true);
     expect(hasServerAcknowledgedLocalDispatch({ ...common, threadError: "failed" })).toBe(true);
+  });
+});
+
+describe("shouldApplySidechatSeed", () => {
+  const claudeInstance = ProviderInstanceId.make("claudeAgent");
+  const codexInstance = ProviderInstanceId.make("codex");
+
+  it("skips the seed when the provider forks natively on the parent's instance", () => {
+    expect(
+      shouldApplySidechatSeed({
+        selectedProvider: { supportsSessionFork: true },
+        selectedInstanceId: claudeInstance,
+        parentSessionInstanceId: claudeInstance,
+      }),
+    ).toBe(false);
+  });
+
+  it("keeps the seed for providers without native fork", () => {
+    expect(
+      shouldApplySidechatSeed({
+        selectedProvider: {},
+        selectedInstanceId: codexInstance,
+        parentSessionInstanceId: codexInstance,
+      }),
+    ).toBe(true);
+    expect(
+      shouldApplySidechatSeed({
+        selectedProvider: null,
+        selectedInstanceId: codexInstance,
+        parentSessionInstanceId: codexInstance,
+      }),
+    ).toBe(true);
+  });
+
+  it("keeps the seed when the sidechat starts on a different instance than the parent", () => {
+    expect(
+      shouldApplySidechatSeed({
+        selectedProvider: { supportsSessionFork: true },
+        selectedInstanceId: codexInstance,
+        parentSessionInstanceId: claudeInstance,
+      }),
+    ).toBe(true);
+  });
+
+  it("keeps the seed when the parent has no known session", () => {
+    expect(
+      shouldApplySidechatSeed({
+        selectedProvider: { supportsSessionFork: true },
+        selectedInstanceId: claudeInstance,
+        parentSessionInstanceId: null,
+      }),
+    ).toBe(true);
   });
 });

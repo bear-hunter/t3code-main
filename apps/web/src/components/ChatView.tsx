@@ -215,10 +215,19 @@ import {
   useProject,
   useProjects,
   useThread,
+  useThreadDetail,
   useThreadProposedPlans,
   useThreadRefs,
   useThreadShell,
 } from "../state/entities";
+import {
+  applySidechatSeedPrompt,
+  buildSidechatSeedPrompt,
+  SIDECHAT_DEFAULT_TITLE,
+} from "@t3tools/client-runtime/state/sidechat";
+import { SidechatTabBar } from "./SidechatTabBar";
+import { useSidechatStore } from "../sidechatStore";
+import { onSpawnSidechatRequest } from "../sidechatBus";
 import { environmentShell } from "../state/shell";
 import { ChatComposer, type ChatComposerHandle } from "./chat/ChatComposer";
 import { DraftHeroHeadline } from "./chat/DraftHeroHeadline";
@@ -275,8 +284,10 @@ import {
   revokeBlobPreviewUrl,
   revokeUserMessagePreviewUrls,
   shouldWriteThreadErrorToCurrentServerThread,
+  shouldApplySidechatSeed,
   startNewThreadForProject,
   waitForStartedServerThread,
+  waitForThreadShell,
 } from "./ChatView.logic";
 import type { ThreadSyncPhase } from "../threadSync";
 import { useLocalStorage } from "~/hooks/useLocalStorage";
@@ -472,6 +483,12 @@ type ChatViewProps =
       threadSyncPhase?: ThreadSyncPhase | null;
       routeKind: "server";
       draftId?: never;
+      /**
+       * The routed thread when this view can host sidechat tabs. `threadId`
+       * is the displayed tab (the parent itself, or one of its sidechats
+       * selected via the `?sidechat=` search param).
+       */
+      sidechatParentThreadId?: ThreadId;
     }
   | {
       environmentId: EnvironmentId;
@@ -482,6 +499,7 @@ type ChatViewProps =
       threadSyncPhase?: never;
       routeKind: "draft";
       draftId: DraftId;
+      sidechatParentThreadId?: never;
     };
 
 interface TerminalLaunchContext {
@@ -1462,6 +1480,119 @@ function ChatViewContent(props: ChatViewProps) {
   const isLocalDraftThread = !isServerThread && localDraftThread !== undefined;
   const canCheckoutPullRequestIntoThread = isLocalDraftThread;
   const activeThreadId = activeThread?.id ?? null;
+  // Sidechat tabs: `threadId` is the displayed tab; the routed (parent)
+  // thread arrives via `sidechatParentThreadId` on server routes.
+  const sidechatParentThreadId =
+    routeKind === "server" ? (props.sidechatParentThreadId ?? null) : null;
+  const sidechatParentRef = useMemo(
+    () =>
+      sidechatParentThreadId !== null
+        ? scopeThreadRef(environmentId, sidechatParentThreadId)
+        : null,
+    [environmentId, sidechatParentThreadId],
+  );
+  // Deduped with the displayed thread's subscription while the Main tab is
+  // active; while a sidechat is displayed this keeps the parent detail warm
+  // so spawning a sibling can build its seed transcript.
+  const sidechatParentDetail = useThreadDetail(sidechatParentRef);
+  const activeSidechatId =
+    sidechatParentThreadId !== null && sidechatParentThreadId !== threadId ? threadId : null;
+  const registerSpawnedSidechat = useSidechatStore((store) => store.registerSpawnedSidechat);
+  const clearSidechatPendingSeed = useSidechatStore((store) => store.clearPendingSeed);
+  const sidechatSpawnInFlightRef = useRef(false);
+
+  const selectSidechatTab = useCallback(
+    (sidechatThreadId: ThreadId) => {
+      if (sidechatParentThreadId === null) return;
+      void navigate({
+        to: "/$environmentId/$threadId",
+        params: { environmentId, threadId: sidechatParentThreadId },
+        search: { sidechat: sidechatThreadId },
+      });
+    },
+    [environmentId, navigate, sidechatParentThreadId],
+  );
+  const selectMainSidechatTab = useCallback(() => {
+    if (sidechatParentThreadId === null) return;
+    void navigate({
+      to: "/$environmentId/$threadId",
+      params: { environmentId, threadId: sidechatParentThreadId },
+      search: {},
+    });
+  }, [environmentId, navigate, sidechatParentThreadId]);
+
+  const spawnSidechat = useCallback(async () => {
+    const parentThread = sidechatParentDetail;
+    if (
+      routeKind !== "server" ||
+      sidechatParentRef === null ||
+      parentThread === null ||
+      // Nesting is rejected server-side; don't offer it client-side either.
+      parentThread.parentThreadId != null ||
+      sidechatSpawnInFlightRef.current
+    ) {
+      return;
+    }
+    sidechatSpawnInFlightRef.current = true;
+    try {
+      const createdAt = new Date().toISOString();
+      const sidechatThreadId = newThreadId();
+      const seed = buildSidechatSeedPrompt({
+        parentTitle: parentThread.title,
+        messages: parentThread.messages,
+      });
+      const createResult = await createThread({
+        environmentId,
+        input: {
+          threadId: sidechatThreadId,
+          projectId: parentThread.projectId,
+          title: SIDECHAT_DEFAULT_TITLE,
+          parentThreadId: parentThread.id,
+          modelSelection: parentThread.modelSelection,
+          runtimeMode: parentThread.runtimeMode,
+          interactionMode: "default",
+          branch: parentThread.branch,
+          worktreePath: parentThread.worktreePath,
+          createdAt,
+        },
+      });
+      if (createResult._tag === "Failure") {
+        if (!isAtomCommandInterrupted(createResult)) {
+          const error = squashAtomCommandFailure(createResult);
+          toastManager.add(
+            stackedThreadToast({
+              type: "error",
+              title: "Could not start sidechat",
+              description:
+                error instanceof Error
+                  ? error.message
+                  : "An error occurred while creating the sidechat.",
+            }),
+          );
+        }
+        return;
+      }
+      registerSpawnedSidechat(sidechatParentRef, sidechatThreadId, seed);
+      await settlePromise(() =>
+        waitForThreadShell(scopeThreadRef(environmentId, sidechatThreadId)),
+      );
+      selectSidechatTab(sidechatThreadId);
+    } finally {
+      sidechatSpawnInFlightRef.current = false;
+    }
+  }, [
+    createThread,
+    environmentId,
+    registerSpawnedSidechat,
+    routeKind,
+    selectSidechatTab,
+    sidechatParentDetail,
+    sidechatParentRef,
+  ]);
+
+  // Entry points outside this component (command palette) request spawns
+  // over the sidechat bus.
+  useEffect(() => onSpawnSidechatRequest(() => void spawnSidechat()), [spawnSidechat]);
   const runningTerminalIds = useThreadRunningTerminalIds({
     environmentId: activeThread?.environmentId ?? null,
     threadId: activeThreadId,
@@ -4398,6 +4529,13 @@ function ChatViewContent(props: ChatViewProps) {
         return;
       }
 
+      if (command === "chat.newSidechat") {
+        event.preventDefault();
+        event.stopPropagation();
+        void spawnSidechat();
+        return;
+      }
+
       if (command === "terminal.split") {
         event.preventDefault();
         event.stopPropagation();
@@ -4488,6 +4626,7 @@ function ChatViewContent(props: ChatViewProps) {
     createNewTerminal,
     setTerminalOpen,
     runProjectScript,
+    spawnSidechat,
     splitTerminal,
     splitPanelTerminal,
     keybindings,
@@ -4708,12 +4847,38 @@ function ChatViewContent(props: ChatViewProps) {
     );
     const messageIdForSend = newMessageId();
     const messageCreatedAt = new Date().toISOString();
+    // A freshly spawned sidechat carries the parent's context into its first
+    // turn. Fork-capable providers (Claude) inherit it natively — the server
+    // forks the parent's session — so the transcript seed stored at spawn is
+    // only prefixed when no native fork will happen.
+    const sidechatSeedRef = scopeThreadRef(activeThread.environmentId, threadIdForSend);
+    const pendingSidechatSeed =
+      isServerThread && activeThread.messages.length === 0
+        ? (useSidechatStore.getState().pendingSeedByThreadKey[scopedThreadKey(sidechatSeedRef)] ??
+          null)
+        : null;
+    const sidechatSeed =
+      pendingSidechatSeed !== null &&
+      shouldApplySidechatSeed({
+        selectedProvider:
+          providerStatuses.find(
+            (status) => status.instanceId === ctxSelectedModelSelection.instanceId,
+          ) ?? null,
+        selectedInstanceId: ctxSelectedModelSelection.instanceId,
+        parentSessionInstanceId: sidechatParentDetail?.session?.providerInstanceId ?? null,
+      })
+        ? pendingSidechatSeed
+        : null;
+    const outgoingBaseText = messageTextForSend || IMAGE_ONLY_BOOTSTRAP_PROMPT;
     const outgoingMessageText = formatOutgoingPrompt({
       provider: ctxSelectedProvider,
       model: ctxSelectedModel,
       models: ctxSelectedProviderModels,
       effort: ctxSelectedPromptEffort,
-      text: messageTextForSend || IMAGE_ONLY_BOOTSTRAP_PROMPT,
+      text:
+        sidechatSeed !== null
+          ? applySidechatSeedPrompt(sidechatSeed, outgoingBaseText)
+          : outgoingBaseText,
     });
     const turnAttachmentsPromise = Promise.all(
       composerImagesSnapshot.map(async (image) => ({
@@ -4894,6 +5059,10 @@ function ChatViewContent(props: ChatViewProps) {
         failure = startResult;
       } else {
         turnStartSucceeded = true;
+        // Spent whether it was prefixed or superseded by a native fork.
+        if (pendingSidechatSeed !== null) {
+          clearSidechatPendingSeed(sidechatSeedRef);
+        }
       }
     }
 
@@ -5778,6 +5947,17 @@ function ChatViewContent(props: ChatViewProps) {
             onDeleteProjectScript={deleteProjectScript}
           />
         </header>
+
+        {sidechatParentRef !== null ? (
+          <SidechatTabBar
+            parentThreadRef={sidechatParentRef}
+            activeSidechatId={activeSidechatId}
+            onSelectMain={selectMainSidechatTab}
+            onSelectSidechat={selectSidechatTab}
+            onSpawnSidechat={() => void spawnSidechat()}
+            spawnDisabled={sidechatParentDetail === null}
+          />
+        ) : null}
 
         <ThreadErrorBanner
           error={threadError}

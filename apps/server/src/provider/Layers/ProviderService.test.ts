@@ -84,7 +84,10 @@ type LegacyProviderRuntimeEvent = {
   readonly [key: string]: unknown;
 };
 
-function makeFakeCodexAdapter(provider: ProviderDriverKind = CODEX_DRIVER) {
+function makeFakeCodexAdapter(
+  provider: ProviderDriverKind = CODEX_DRIVER,
+  capabilityOverrides?: Partial<ProviderAdapterShape<ProviderAdapterError>["capabilities"]>,
+) {
   const sessions = new Map<ThreadId, ProviderSession>();
   const runtimeEventPubSub = Effect.runSync(PubSub.unbounded<ProviderRuntimeEvent>());
 
@@ -203,6 +206,8 @@ function makeFakeCodexAdapter(provider: ProviderDriverKind = CODEX_DRIVER) {
     provider,
     capabilities: {
       sessionModelSwitch: "in-session",
+      sessionFork: "unsupported",
+      ...capabilityOverrides,
     },
     startSession,
     sendTurn,
@@ -364,6 +369,86 @@ it.effect("ProviderServiceLive catches stopAll failures during shutdown", () =>
     assert.equal(Exit.isSuccess(closeExit), true);
     assert.equal(codex.stopAll.mock.calls.length, 1);
   }),
+);
+
+it.effect("startSession forks the parent's cursor only for sidechat first starts", () =>
+  Effect.gen(function* () {
+    const claude = makeFakeCodexAdapter(CLAUDE_AGENT_DRIVER, { sessionFork: "native" });
+    const codex = makeFakeCodexAdapter();
+    const registry = makeAdapterRegistryMock({
+      [CLAUDE_AGENT_DRIVER]: claude.adapter,
+      [CODEX_DRIVER]: codex.adapter,
+    });
+    const providerAdapterLayer = Layer.succeed(
+      ProviderAdapterRegistry.ProviderAdapterRegistry,
+      registry,
+    );
+    const runtimeRepositoryLayer = ProviderSessionRuntime.layer.pipe(
+      Layer.provide(SqlitePersistenceMemory),
+    );
+    const directoryLayer = ProviderSessionDirectoryLive.pipe(Layer.provide(runtimeRepositoryLayer));
+    const providerLayer = makeProviderServiceLive().pipe(
+      Layer.provide(providerAdapterLayer),
+      Layer.provide(directoryLayer),
+      Layer.provide(defaultServerSettingsLayer),
+      Layer.provide(AnalyticsService.layerTest),
+      Layer.provide(
+        Layer.succeed(
+          ProviderEventLoggers.ProviderEventLoggers,
+          ProviderEventLoggers.NoOpProviderEventLoggers,
+        ),
+      ),
+    );
+
+    yield* Effect.gen(function* () {
+      const provider = yield* ProviderService.ProviderService;
+      // Parent starts normally and persists its cursor.
+      yield* provider.startSession(asThreadId("thread-parent"), {
+        providerInstanceId: claudeAgentInstanceId,
+        threadId: asThreadId("thread-parent"),
+        runtimeMode: "full-access",
+      });
+      // Sidechat first start: no own cursor yet — forks the parent's.
+      yield* provider.startSession(asThreadId("thread-sidechat"), {
+        providerInstanceId: claudeAgentInstanceId,
+        threadId: asThreadId("thread-sidechat"),
+        parentThreadId: asThreadId("thread-parent"),
+        runtimeMode: "full-access",
+      });
+      // Sidechat restart: its own persisted cursor wins, no fork.
+      yield* provider.startSession(asThreadId("thread-sidechat"), {
+        providerInstanceId: claudeAgentInstanceId,
+        threadId: asThreadId("thread-sidechat"),
+        parentThreadId: asThreadId("thread-parent"),
+        runtimeMode: "full-access",
+      });
+      // Fork-incapable adapter: parentThreadId is ignored.
+      yield* provider.startSession(asThreadId("thread-codex-parent"), {
+        providerInstanceId: codexInstanceId,
+        threadId: asThreadId("thread-codex-parent"),
+        runtimeMode: "full-access",
+      });
+      yield* provider.startSession(asThreadId("thread-codex-sidechat"), {
+        providerInstanceId: codexInstanceId,
+        threadId: asThreadId("thread-codex-sidechat"),
+        parentThreadId: asThreadId("thread-codex-parent"),
+        runtimeMode: "full-access",
+      });
+    }).pipe(Effect.provide(providerLayer));
+
+    const sidechatFirstStart = claude.startSession.mock.calls[1]?.[0];
+    assert.deepEqual(sidechatFirstStart?.forkFromResumeCursor, {
+      opaque: "resume-thread-parent",
+    });
+    assert.equal(sidechatFirstStart?.resumeCursor, undefined);
+
+    const sidechatRestart = claude.startSession.mock.calls[2]?.[0];
+    assert.equal(sidechatRestart?.forkFromResumeCursor, undefined);
+    assert.deepEqual(sidechatRestart?.resumeCursor, { opaque: "resume-thread-sidechat" });
+
+    const codexSidechatStart = codex.startSession.mock.calls[1]?.[0];
+    assert.equal(codexSidechatStart?.forkFromResumeCursor, undefined);
+  }).pipe(Effect.provide(NodeServices.layer)),
 );
 
 it.effect("ProviderServiceLive rejects new sessions for disabled providers", () =>

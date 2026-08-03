@@ -259,6 +259,63 @@ describe("sortThreadsForListV2", () => {
 });
 
 describe("buildThreadListV2Items", () => {
+  it("groups sidechats indented under their parent, in spawn order", () => {
+    const parentId = ThreadId.make("parent");
+    const layout = buildThreadListV2Items({
+      threads: [
+        makeThread({
+          id: ThreadId.make("sidechat-late"),
+          title: "Sidechat late",
+          parentThreadId: parentId,
+          createdAt: "2026-06-01T02:00:00.000Z",
+        }),
+        makeThread({ id: ThreadId.make("other"), title: "Other" }),
+        makeThread({ id: parentId, title: "Parent", createdAt: "2026-06-01T01:00:00.000Z" }),
+        makeThread({
+          id: ThreadId.make("sidechat-early"),
+          title: "Sidechat early",
+          parentThreadId: parentId,
+          createdAt: "2026-06-01T01:30:00.000Z",
+        }),
+      ],
+      environmentId: null,
+      searchQuery: "",
+      now: NOW,
+    });
+
+    expect(layout.items.map((item) => [item.thread.id, item.sidechat] as const)).toEqual([
+      ["parent", false],
+      ["sidechat-early", true],
+      ["sidechat-late", true],
+      ["other", false],
+    ]);
+    expect(layout.items.filter((item) => item.sidechat).map((item) => item.variant)).toEqual([
+      "slim",
+      "slim",
+    ]);
+  });
+
+  it("keeps sidechats reachable when their parent is missing from the list", () => {
+    const layout = buildThreadListV2Items({
+      threads: [
+        makeThread({ id: ThreadId.make("plain"), title: "Plain" }),
+        makeThread({
+          id: ThreadId.make("orphan-sidechat"),
+          title: "Orphan sidechat",
+          parentThreadId: ThreadId.make("deleted-parent"),
+        }),
+      ],
+      environmentId: null,
+      searchQuery: "",
+      now: NOW,
+    });
+
+    expect(layout.items.map((item) => [item.thread.id, item.sidechat] as const)).toEqual([
+      ["plain", false],
+      ["orphan-sidechat", false],
+    ]);
+  });
+
   it("hides snoozed threads and counts them — visibility parity with web", () => {
     const layout = buildThreadListV2Items({
       threads: [

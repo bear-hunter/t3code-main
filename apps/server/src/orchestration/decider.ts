@@ -355,6 +355,32 @@ export const decideOrchestrationCommand = Effect.fn("decideOrchestrationCommand"
         command,
         threadId: command.threadId,
       });
+      if (command.parentThreadId !== undefined) {
+        const parentThread = yield* requireThread({
+          readModel,
+          command,
+          threadId: command.parentThreadId,
+        });
+        if (parentThread.deletedAt !== null) {
+          return yield* new OrchestrationCommandInvariantError({
+            commandType: command.type,
+            detail: `Parent thread '${command.parentThreadId}' is deleted and cannot spawn a sidechat.`,
+          });
+        }
+        if (parentThread.projectId !== command.projectId) {
+          return yield* new OrchestrationCommandInvariantError({
+            commandType: command.type,
+            detail: `Parent thread '${command.parentThreadId}' belongs to a different project.`,
+          });
+        }
+        // Sidechats stay one level deep so the tab model stays flat.
+        if (parentThread.parentThreadId != null) {
+          return yield* new OrchestrationCommandInvariantError({
+            commandType: command.type,
+            detail: `Thread '${command.parentThreadId}' is itself a sidechat and cannot have sidechats.`,
+          });
+        }
+      }
       return {
         ...(yield* withEventBase({
           aggregateKind: "thread",
@@ -367,6 +393,12 @@ export const decideOrchestrationCommand = Effect.fn("decideOrchestrationCommand"
           threadId: command.threadId,
           projectId: command.projectId,
           title: command.title,
+          ...(command.parentThreadId !== undefined
+            ? { parentThreadId: command.parentThreadId }
+            : {}),
+          ...(command.spawnedAtMessageId !== undefined
+            ? { spawnedAtMessageId: command.spawnedAtMessageId }
+            : {}),
           modelSelection: command.modelSelection,
           runtimeMode: command.runtimeMode,
           interactionMode: command.interactionMode,
@@ -384,6 +416,30 @@ export const decideOrchestrationCommand = Effect.fn("decideOrchestrationCommand"
         command,
         threadId: command.threadId,
       });
+      // Deleting a parent cascades to its sidechats: a sidechat only exists
+      // through its parent's tab strip, so an orphan would be unreachable.
+      const activeSidechats = readModel.threads.filter(
+        (thread) => thread.parentThreadId === command.threadId && thread.deletedAt === null,
+      );
+      if (activeSidechats.length > 0) {
+        return yield* decideCommandSequence({
+          readModel,
+          commands: [
+            ...activeSidechats.map(
+              (thread): Extract<OrchestrationCommand, { type: "thread.delete" }> => ({
+                type: "thread.delete",
+                commandId: command.commandId,
+                threadId: thread.id,
+              }),
+            ),
+            {
+              type: "thread.delete",
+              commandId: command.commandId,
+              threadId: command.threadId,
+            },
+          ],
+        });
+      }
       const occurredAt = yield* nowIso;
       return {
         ...(yield* withEventBase({

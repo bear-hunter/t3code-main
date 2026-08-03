@@ -30,6 +30,7 @@ import {
 import { useTerminalUiStateStore } from "../terminalUiStateStore";
 import { buildThreadRouteParams, resolveThreadRouteRef } from "../threadRoutes";
 import { formatWorktreePathForDisplay, getOrphanedWorktreePathForThread } from "../worktreeCleanup";
+import { isSidechatHiddenFromThreadLists, useSidechatStore } from "../sidechatStore";
 import { stackedThreadToast, toastManager } from "../components/ui/toast";
 import { useClientSettings } from "./useSettings";
 import { useAtomCommand } from "../state/use-atom-command";
@@ -294,8 +295,15 @@ export function useThreadActions() {
       const shouldNavigateToFallback =
         currentRouteThreadRef?.threadId === threadRef.threadId &&
         currentRouteThreadRef.environmentId === threadRef.environmentId;
+      const sidechatState = useSidechatStore.getState();
+      // Fallback navigation must not land on a thread hidden from the
+      // sidebar: sidechats only surface through their parent's tab strip.
       const fallbackThreadId = getFallbackThreadIdAfterDelete({
-        threads,
+        threads: threads.filter(
+          (entry) =>
+            entry.id === threadRef.threadId ||
+            !isSidechatHiddenFromThreadLists(entry, sidechatState.promotedThreadKeys),
+        ),
         deletedThreadId: threadRef.threadId,
         deletedThreadIds,
         sortOrder: sidebarThreadSortOrder,
@@ -314,6 +322,14 @@ export function useThreadActions() {
         threadRef,
       );
       clearTerminalUiState(threadRef);
+      // Server-side deletion cascades to sidechats; drop their client tab
+      // state (and this thread's own, whether parent or sidechat).
+      sidechatState.removeThread(threadRef);
+      for (const entry of threads) {
+        if (entry.parentThreadId === threadRef.threadId) {
+          sidechatState.removeThread(scopeThreadRef(entry.environmentId, entry.id));
+        }
+      }
 
       if (shouldNavigateToFallback) {
         if (fallbackThreadId) {
@@ -534,11 +550,23 @@ export function useThreadActions() {
 
       if (confirmThreadDelete && localApi) {
         const title = resolved?.thread.title ?? "this thread";
+        // Deleting a parent cascades server-side to its sidechats; say so.
+        const sidechatCount = readEnvironmentThreadRefs(target.environmentId).filter((ref) => {
+          const shell = readThreadShell(ref);
+          return shell !== null && shell.parentThreadId === target.threadId;
+        }).length;
         const confirmationResult = await settlePromise(() =>
           localApi.dialogs.confirm(
             [
               `Delete thread "${title}"?`,
               "This permanently clears conversation history for this thread.",
+              ...(sidechatCount > 0
+                ? [
+                    `This also deletes its ${
+                      sidechatCount === 1 ? "sidechat" : `${sidechatCount} sidechats`
+                    }.`,
+                  ]
+                : []),
             ].join("\n"),
           ),
         );

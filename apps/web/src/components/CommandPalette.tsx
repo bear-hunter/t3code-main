@@ -35,6 +35,7 @@ import {
   FolderPlusIcon,
   LinkIcon,
   MessageSquareIcon,
+  MessageSquareTextIcon,
   SettingsIcon,
   SquarePenIcon,
   TextSearchIcon,
@@ -68,7 +69,12 @@ import { useAtomQueryRunner } from "../state/use-atom-query-runner";
 import { useEnvironments, usePrimaryEnvironmentId } from "../state/environments";
 import { useProjects, useThreadShells } from "../state/entities";
 import { useThreadSearch } from "../state/queries";
-import { resolveThreadActionProjectRef, startNewThreadFromContext } from "../lib/chatThreadActions";
+import {
+  resolveThreadActionProjectRef,
+  startNewThreadFromContext,
+  startSidechatFromContext,
+} from "../lib/chatThreadActions";
+import { isSidechatHiddenFromThreadLists, useSidechatStore } from "../sidechatStore";
 import {
   appendBrowsePathSegment,
   ensureBrowseDirectoryPath,
@@ -554,7 +560,17 @@ function OpenCommandPaletteDialog(props: {
     useHandleNewThread();
   const projects = useProjects();
   const projectOrder = useUiStateStore((store) => store.projectOrder);
-  const threads = useThreadShells();
+  const allThreadShells = useThreadShells();
+  const promotedSidechatThreadKeys = useSidechatStore((store) => store.promotedThreadKeys);
+  // Sidechats live in their parent's tab strip; keep them out of every
+  // palette thread list (recents, search, latest-thread-in-project).
+  const threads = useMemo(
+    () =>
+      allThreadShells.filter(
+        (thread) => !isSidechatHiddenFromThreadLists(thread, promotedSidechatThreadKeys),
+      ),
+    [allThreadShells, promotedSidechatThreadKeys],
+  );
   const keybindings = useAtomValue(primaryServerKeybindingsAtom);
   const providers = useAtomValue(primaryServerProvidersAtom);
   const [viewStack, setViewStack] = useState<CommandPaletteView[]>([]);
@@ -1390,6 +1406,26 @@ function OpenCommandPaletteDialog(props: {
       icon: <SquarePenIcon className={ITEM_ICON_CLASS} />,
       addonIcon: <SquarePenIcon className={ADDON_ICON_CLASS} />,
       groups: [{ value: "projects", label: "Projects", items: projectThreadItems }],
+    });
+  }
+
+  // Sidechats spawn from a started server thread; a sidechat itself cannot
+  // nest another one.
+  if (activeThread && activeThread.parentThreadId == null) {
+    actionItems.push({
+      kind: "action",
+      value: "action:new-sidechat",
+      searchTerms: ["new sidechat", "side chat", "tab", "spawn", "context"],
+      title: (
+        <>
+          New sidechat in <span className="font-semibold">{activeThread.title}</span>
+        </>
+      ),
+      icon: <MessageSquareTextIcon className={ITEM_ICON_CLASS} />,
+      shortcutCommand: "chat.newSidechat",
+      run: async () => {
+        startSidechatFromContext();
+      },
     });
   }
 

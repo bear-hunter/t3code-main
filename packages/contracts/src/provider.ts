@@ -58,6 +58,14 @@ export const ProviderSessionStartInput = Schema.Struct({
   cwd: Schema.optional(TrimmedNonEmptyString),
   modelSelection: Schema.optional(ModelSelection),
   resumeCursor: Schema.optional(Schema.Unknown),
+  /** Set when the thread is a sidechat: its parent thread. On the first
+      start (no own resume cursor) ProviderService uses this to look up the
+      parent's session so fork-capable adapters can branch it natively. */
+  parentThreadId: Schema.optional(ThreadId),
+  /** Parent thread's persisted resume cursor, injected by ProviderService
+      when the adapter's `sessionFork` capability is "native". The adapter
+      must resume it under a NEW session id — never write into the parent. */
+  forkFromResumeCursor: Schema.optional(Schema.Unknown),
   approvalPolicy: Schema.optional(ProviderApprovalPolicy),
   sandboxMode: Schema.optional(ProviderSandboxMode),
   runtimeMode: RuntimeMode,

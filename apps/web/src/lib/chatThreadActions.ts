@@ -1,6 +1,7 @@
 import { scopeProjectRef } from "@t3tools/client-runtime/environment";
 import type { EnvironmentId, ProjectId, ScopedProjectRef } from "@t3tools/contracts";
 import type { DraftThreadEnvMode } from "../composerDraftStore";
+import { requestSpawnSidechat } from "../sidechatBus";
 
 interface ThreadContextLike {
   environmentId: EnvironmentId;
@@ -64,4 +65,12 @@ export async function startNewThreadFromContext(
 
   await context.handleNewThread(projectRef);
   return true;
+}
+
+// Every sidechat entry point (palette, future surfaces) funnels through
+// here. The mounted chat view owns the actual spawn flow — it already holds
+// the routed thread's detail for the seed transcript and the tab navigation
+// — so this only signals it over the sidechat bus.
+export function startSidechatFromContext(): void {
+  requestSpawnSidechat();
 }
