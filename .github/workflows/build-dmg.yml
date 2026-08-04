@@ -1,0 +1,75 @@
+# Fork-friendly single-artifact release: builds an unsigned macOS DMG on a
+# GitHub-hosted arm64 runner and publishes it as a GitHub Release. The
+# upstream release.yml needs custom runners and production signing secrets
+# this fork does not have.
+name: Build macOS DMG
+
+on:
+  workflow_dispatch:
+    inputs:
+      version:
+        description: "Release version (for example 0.0.31-sidechat.1)"
+        required: false
+        type: string
+
+permissions:
+  contents: write
+
+jobs:
+  build_dmg:
+    name: Build macOS arm64 DMG
+    runs-on: macos-latest
+    timeout-minutes: 45
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v6
+        with:
+          sparse-checkout: |
+            /*
+            !/.repos/
+          sparse-checkout-cone-mode: false
+
+      - name: Setup Vite+
+        uses: voidzero-dev/setup-vp@v1
+        with:
+          node-version-file: package.json
+          cache: true
+          run-install: |
+            args:
+              - --filter=@t3tools/desktop...
+              - --filter=t3...
+              - --filter=@t3tools/scripts...
+
+      - name: Setup Rust
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: aarch64-apple-darwin
+
+      - id: meta
+        name: Resolve version
+        shell: bash
+        run: |
+          version="${{ github.event.inputs.version }}"
+          version="${version:-0.0.31-sidechat.1}"
+          version="${version#v}"
+          echo "version=$version" >> "$GITHUB_OUTPUT"
+
+      - name: Build DMG (unsigned)
+        shell: bash
+        run: |
+          vp run dist:desktop:artifact \
+            --platform mac \
+            --target dmg \
+            --arch arm64 \
+            --build-version "${{ steps.meta.outputs.version }}" \
+            --verbose
+
+      - name: Publish release
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: v${{ steps.meta.outputs.version }}
+          name: T3 Code v${{ steps.meta.outputs.version }} (macOS arm64)
+          generate_release_notes: true
+          files: |
+            release/*.dmg
+          fail_on_unmatched_files: true
