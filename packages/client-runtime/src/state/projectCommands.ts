@@ -66,6 +66,12 @@ export function createProjectEnvironmentAtoms<R, E>(
       staleTimeMs: 30_000,
       idleTtlMs: 5 * 60_000,
     }),
+    // Explicit user refresh: forces a server-side filesystem rescan (the
+    // listEntries query alone answers from the cached search index).
+    refreshEntries: createEnvironmentRpcCommand(runtime, {
+      label: "environment-data:projects:refresh-entries",
+      tag: WS_METHODS.projectsListEntries,
+    }),
     readFile: createEnvironmentRpcQueryAtomFamily(runtime, {
       label: "environment-data:projects:read-file",
       tag: WS_METHODS.projectsReadFile,

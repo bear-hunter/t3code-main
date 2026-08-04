@@ -1643,7 +1643,12 @@ const makeWsRpcLayer = (
         [WS_METHODS.projectsListEntries]: (input) =>
           observeRpcEffect(
             WS_METHODS.projectsListEntries,
-            workspaceEntries.list(input).pipe(
+            (input.refresh === true
+              ? workspaceEntries
+                  .refresh(input.cwd)
+                  .pipe(Effect.andThen(workspaceEntries.list(input)))
+              : workspaceEntries.list(input)
+            ).pipe(
               Effect.mapError(
                 (cause) =>
                   new ProjectListEntriesError({

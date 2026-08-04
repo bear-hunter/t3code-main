@@ -1,4 +1,5 @@
 import { useAtomRefresh, useAtomValue } from "@effect/atom-react";
+import { useAtomCommand } from "~/state/use-atom-command";
 import type {
   EnvironmentId,
   ProjectListEntriesResult,
@@ -128,7 +129,15 @@ export function useProjectEntriesQuery(
   const atom = getProjectEntriesQueryAtom(environmentId, cwd);
   const result = useAtomValue(atom);
   const refreshAtom = useAtomRefresh(atom);
-  const refresh = useCallback(() => refreshAtom(), [refreshAtom]);
+  const refreshEntries = useAtomCommand(projectEnvironment.refreshEntries, {
+    reportFailure: false,
+  });
+  // Rescan the workspace on the server first — the listEntries query alone
+  // answers from the cached search index and would return the same stale
+  // listing for files created outside the app.
+  const refresh = useCallback(() => {
+    void refreshEntries({ environmentId, input: { cwd, refresh: true } }).then(() => refreshAtom());
+  }, [cwd, environmentId, refreshAtom, refreshEntries]);
   return {
     data: Option.getOrNull(AsyncResult.value(result)),
     error: errorMessage(result),

@@ -1,5 +1,34 @@
+diff --git a/dist/components/VirtualizedFile.js b/dist/components/VirtualizedFile.js
+index 101e31d..441d464 100644
+--- a/dist/components/VirtualizedFile.js
++++ b/dist/components/VirtualizedFile.js
+@@ -287,11 +287,22 @@ var VirtualizedFile = class extends File {
+ 		this.forceRenderOverride = true;
+ 		this.virtualizer.instanceChanged(this, false);
+ 	}
+-	applyDocumentChange(textDocument, newLineAnnotations, shouldUpdateBuffer = false) {
++	applyDocumentChange(textDocument, newLineAnnotations, shouldUpdateBuffer = false, change) {
+ 		const previousRenderRange = this.renderRange;
+ 		super.applyDocumentChange(textDocument, newLineAnnotations);
+ 		this.getSimpleVirtualizer()?.markDOMDirty();
+-		this.resetLayoutCache(this.isSimpleMode(), false);
++		if (change !== void 0 && change.lineDelta !== 0 && this.cache.heights.size > 0) {
++			const shiftedHeights = new Map();
++			for (const [lineIndex, height] of this.cache.heights) {
++				if (lineIndex < change.startLine) shiftedHeights.set(lineIndex, height);
++				else if (lineIndex >= change.startLine - change.lineDelta) shiftedHeights.set(lineIndex + change.lineDelta, height);
++			}
++			this.cache.heights = shiftedHeights;
++			this.layoutDirty = true;
++			this.cache.fileAnnotationHeight = 0;
++			if (this.cache.checkpoints.length > 0) this.cache.checkpoints.length = 0;
++			if (this.isSimpleMode()) this.computeApproximateSize();
++		} else this.resetLayoutCache(this.isSimpleMode(), false);
+ 		if (shouldUpdateBuffer && previousRenderRange !== void 0 && this.file !== void 0) {
+ 			const windowSpecs = this.virtualizer.getWindowSpecs();
+ 			const renderRange = this.computeRenderRangeFromWindow(this.file, this.top ?? 0, windowSpecs);
 diff --git a/dist/editor/editor.js b/dist/editor/editor.js
-index ff78e2a..f9df318 100644
+index ff78e2a..248768e 100644
 --- a/dist/editor/editor.js
 +++ b/dist/editor/editor.js
 @@ -146,14 +146,11 @@ var Editor = class {
@@ -28,14 +57,16 @@ index ff78e2a..f9df318 100644
  				const gutterRow = resolveGutterTarget(e.composedPath()[0]);
  				if (gutterRow?.dataset.lineType === "change-deletion") {
  					const code = gutterRow.closest("[data-code]");
-@@ -1522,6 +1520,7 @@ var Editor = class {
+@@ -1522,7 +1520,8 @@ var Editor = class {
  			if (gutterEl !== void 0) gutterEl.style.gridRow = "span " + gridRow;
  		}
  		fileInstance.updateRenderCache(dirtyLines, tokenizer.themeType, !didLineCountChange, didLineCountChange);
+-		if (didLineCountChange) fileInstance.applyDocumentChange(textDocument, newLineAnnotations, shouldUpdateBuffer);
 +		if (fileInstance.file !== void 0) fileInstance.file.contents = textDocument.getText();
- 		if (didLineCountChange) fileInstance.applyDocumentChange(textDocument, newLineAnnotations, shouldUpdateBuffer);
++		if (didLineCountChange) fileInstance.applyDocumentChange(textDocument, newLineAnnotations, shouldUpdateBuffer, change);
  		if (this.#isDiff && (this.#diffSyle === "unified" || didLineCountChange)) this.#resetCache();
  		if (newLineAnnotations !== void 0) {
+ 			this.#lineAnnotations = newLineAnnotations;
 @@ -1788,6 +1787,7 @@ var Editor = class {
  		}
  	}
@@ -45,7 +76,7 @@ index ff78e2a..f9df318 100644
  			this.#fileInstance?.setSelectedLines(range, {
  				notify: false,
 diff --git a/dist/react/utils/useFileInstance.js b/dist/react/utils/useFileInstance.js
-index e9f62f5..af82a46 100644
+index e9f62f5..a33006b 100644
 --- a/dist/react/utils/useFileInstance.js
 +++ b/dist/react/utils/useFileInstance.js
 @@ -91,10 +91,7 @@ function mergeFileOptions({ options, controlledSelection, contentEditable, hasCu
@@ -61,7 +92,7 @@ index e9f62f5..af82a46 100644
  	return merged;
  }
 diff --git a/package.json b/package.json
-index ff61c90..1e170e5 100644
+index ff61c90..213b06a 100644
 --- a/package.json
 +++ b/package.json
 @@ -55,6 +55,18 @@
