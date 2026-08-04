@@ -303,14 +303,34 @@ function resultErrorsText(result: SDKResultMessage): string {
     : "";
 }
 
+// Claude Code prefixes internal telemetry lines with "[ede_diagnostic]" and
+// filters them from its own user-facing errors; they are not real error text.
+function resultErrorsWithoutDiagnostics(result: SDKResultMessage): string[] {
+  return "errors" in result && Array.isArray(result.errors)
+    ? result.errors.filter(
+        (error): error is string =>
+          typeof error === "string" && !error.startsWith("[ede_diagnostic]"),
+      )
+    : [];
+}
+
 function isInterruptedResult(result: SDKResultMessage): boolean {
   const errors = resultErrorsText(result);
   if (errors.includes("interrupt")) {
     return true;
   }
+  if (result.subtype !== "error_during_execution") {
+    return false;
+  }
+
+  // A user cancel leaves no real error text: newer CLIs report only
+  // "[ede_diagnostic] ..." telemetry lines (with is_error set), older ones an
+  // aborted-request message.
+  if (resultErrorsWithoutDiagnostics(result).length === 0) {
+    return true;
+  }
 
   return (
-    result.subtype === "error_during_execution" &&
     result.is_error === false &&
     (errors.includes("request was aborted") ||
       errors.includes("interrupted by user") ||
@@ -2554,7 +2574,8 @@ export const makeClaudeAdapter = Effect.fn("makeClaudeAdapter")(function* (
     }
 
     const status = turnStatusFromResult(message);
-    const errorMessage = message.subtype === "success" ? undefined : message.errors[0];
+    const errorMessage =
+      message.subtype === "success" ? undefined : resultErrorsWithoutDiagnostics(message)[0];
 
     if (status === "failed") {
       yield* emitRuntimeError(context, errorMessage ?? "Claude turn failed.");
