@@ -281,6 +281,8 @@ export function projectEvent(
             id: payload.threadId,
             projectId: payload.projectId,
             title: payload.title,
+            parentThreadId: payload.parentThreadId ?? null,
+            spawnedAtMessageId: payload.spawnedAtMessageId ?? null,
             modelSelection: payload.modelSelection,
             runtimeMode: payload.runtimeMode,
             interactionMode: payload.interactionMode,

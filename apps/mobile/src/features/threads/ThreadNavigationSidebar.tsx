@@ -879,6 +879,7 @@ function ThreadNavigationSidebarPane(
               thread={thread}
               variant={item.item.variant}
               snoozed={item.item.snoozed}
+              sidechat={item.item.sidechat}
               snoozePresetMinute={nowMinute}
               snoozeWakeLabelText={item.snoozeWakeLabelText}
               project={projectByKey.get(scopeKey) ?? null}

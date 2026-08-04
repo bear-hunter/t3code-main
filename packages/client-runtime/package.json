@@ -111,6 +111,10 @@
       "types": "./src/state/shell.ts",
       "default": "./src/state/shell.ts"
     },
+    "./state/sidechat": {
+      "types": "./src/state/sidechat.ts",
+      "default": "./src/state/sidechat.ts"
+    },
     "./state/source-control": {
       "types": "./src/state/sourceControl.ts",
       "default": "./src/state/sourceControl.ts"

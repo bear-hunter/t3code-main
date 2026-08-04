@@ -25,11 +25,19 @@ import type * as Stream from "effect/Stream";
 
 export type ProviderSessionModelSwitchMode = "in-session" | "unsupported";
 
+export type ProviderSessionForkMode = "native" | "unsupported";
+
 export interface ProviderAdapterCapabilities {
   /**
    * Declares whether changing the model on an existing session is supported.
    */
   readonly sessionModelSwitch: ProviderSessionModelSwitchMode;
+  /**
+   * Declares whether the adapter can start a session by forking another
+   * session's native state (used to seed a sidechat with its parent's full
+   * context). "native" adapters honor `forkFromResumeCursor` on startSession.
+   */
+  readonly sessionFork: ProviderSessionForkMode;
 }
 
 export interface ProviderThreadTurnSnapshot {

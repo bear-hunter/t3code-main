@@ -180,6 +180,8 @@ export interface ThreadListV2Item {
   readonly variant: "card" | "slim";
   /** Snoozed-shelf row: shows the wake countdown and offers Wake. */
   readonly snoozed: boolean;
+  /** Sidechat of the thread rendered directly above it; drawn indented. */
+  readonly sidechat: boolean;
   readonly isLast: boolean;
 }
 
@@ -354,6 +356,7 @@ export function buildThreadListV2Items(input: {
   const active: EnvironmentThreadShell[] = [];
   const settled: EnvironmentThreadShell[] = [];
   const snoozed: EnvironmentThreadShell[] = [];
+  const sidechatsByParentKey = new Map<string, EnvironmentThreadShell[]>();
   let nextSnoozeWakeAt: string | null = null;
   for (const thread of input.threads) {
     // Callers pass live (unarchived) shells; settled threads are among them
@@ -372,6 +375,16 @@ export function buildThreadListV2Items(input: {
         }),
       ) !== true
     ) {
+      continue;
+    }
+    // Sidechats never partition on their own: they render indented under
+    // their parent wherever the parent lands (mobile views and continues
+    // sidechats; spawning stays a web/desktop affordance for now).
+    if (thread.parentThreadId != null) {
+      const parentKey = `${thread.environmentId}:${thread.parentThreadId}`;
+      const parentSidechats = sidechatsByParentKey.get(parentKey) ?? [];
+      parentSidechats.push(thread);
+      sidechatsByParentKey.set(parentKey, parentSidechats);
       continue;
     }
     const supportsSettlement = input.settlementEnvironmentIds?.has(thread.environmentId) ?? true;
@@ -433,14 +446,53 @@ export function buildThreadListV2Items(input: {
           (thread) => `${thread.environmentId}:${thread.id}` === selectedThreadKey,
         );
 
+  for (const parentSidechats of sidechatsByParentKey.values()) {
+    parentSidechats.sort(
+      (left, right) =>
+        parseTimestampMs(left.createdAt) - parseTimestampMs(right.createdAt) ||
+        left.id.localeCompare(right.id),
+    );
+  }
+  const partitionedParentKeys = new Set(
+    [...active, ...snoozed, ...settled].map((thread) => `${thread.environmentId}:${thread.id}`),
+  );
+
   const items: ThreadListV2Item[] = [];
+  const pushSidechatItems = (parent: EnvironmentThreadShell) => {
+    const parentSidechats = sidechatsByParentKey.get(`${parent.environmentId}:${parent.id}`) ?? [];
+    for (const thread of parentSidechats) {
+      items.push({
+        thread,
+        variant: "slim",
+        snoozed: false,
+        sidechat: true,
+        isLast: false,
+      });
+    }
+  };
   for (const thread of orderedActive) {
     items.push({
       thread,
       variant: "card",
       snoozed: false,
+      sidechat: false,
       isLast: false,
     });
+    pushSidechatItems(thread);
+  }
+  // A sidechat whose parent is not in this list at all (deleted or archived
+  // parent, stale data) still needs a row to stay reachable.
+  for (const [parentKey, parentSidechats] of sidechatsByParentKey) {
+    if (partitionedParentKeys.has(parentKey)) continue;
+    for (const thread of parentSidechats) {
+      items.push({
+        thread,
+        variant: "slim",
+        snoozed: false,
+        sidechat: false,
+        isLast: false,
+      });
+    }
   }
   const snoozedShelfHeaderIndex = orderedSnoozed.length > 0 ? items.length : null;
   for (const thread of visibleSnoozed) {
@@ -448,8 +500,10 @@ export function buildThreadListV2Items(input: {
       thread,
       variant: "slim",
       snoozed: true,
+      sidechat: false,
       isLast: false,
     });
+    pushSidechatItems(thread);
   }
   const settledShelfHeaderIndex = orderedSettled.length > 0 ? items.length : null;
   for (const thread of visibleSettled) {
@@ -457,8 +511,10 @@ export function buildThreadListV2Items(input: {
       thread,
       variant: "slim",
       snoozed: false,
+      sidechat: false,
       isLast: false,
     });
+    pushSidechatItems(thread);
   }
   const last = items.at(-1);
   if (last) {

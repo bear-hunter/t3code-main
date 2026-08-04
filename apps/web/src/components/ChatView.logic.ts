@@ -14,7 +14,7 @@ import { type ChatMessage, type SessionPhase, type Thread, type ThreadShell } fr
 import { type ComposerImageAttachment, type DraftThreadState } from "../composerDraftStore";
 import * as Schema from "effect/Schema";
 import { appAtomRegistry } from "../rpc/atomRegistry";
-import { environmentThreadDetails } from "../state/threads";
+import { environmentThreadDetails, environmentThreadShells } from "../state/threads";
 import {
   filterTerminalContextsWithText,
   stripInlineTerminalContextPlaceholders,
@@ -428,6 +428,72 @@ export function getStartedThreadModelChangeBlockReason(input: {
     title: "Start a new chat to change models",
     description: "This provider does not allow switching models after a conversation has started.",
   };
+}
+
+/**
+ * Whether a sidechat's first send still needs the transcript seed prefix.
+ * When the selected provider natively forks sessions and the sidechat starts
+ * on the same provider instance as its parent's session, the server forks
+ * the parent's full context instead — prefixing the transcript too would
+ * double it. Any uncertainty keeps the seed: a redundant transcript is
+ * recoverable, silently lost context is not.
+ */
+export function shouldApplySidechatSeed(input: {
+  readonly selectedProvider: Pick<ServerProvider, "supportsSessionFork"> | null;
+  readonly selectedInstanceId: ModelSelection["instanceId"] | null;
+  readonly parentSessionInstanceId: ModelSelection["instanceId"] | null;
+}): boolean {
+  if (input.selectedProvider?.supportsSessionFork !== true) return true;
+  if (input.selectedInstanceId === null || input.parentSessionInstanceId === null) return true;
+  return input.selectedInstanceId !== input.parentSessionInstanceId;
+}
+
+/**
+ * Resolves once the thread's shell row lands in the client store (or the
+ * timeout passes). Used after spawning a sidechat: the `?sidechat=` tab only
+ * activates once the shell exists, so navigating before it arrives would
+ * briefly render the Main tab instead of the new sidechat.
+ */
+export async function waitForThreadShell(
+  threadRef: ScopedThreadRef,
+  timeoutMs = 1_000,
+): Promise<boolean> {
+  const shellAtom = environmentThreadShells.threadShellAtom(threadRef);
+  if (appAtomRegistry.get(shellAtom) !== null) {
+    return true;
+  }
+
+  return await new Promise<boolean>((resolve) => {
+    let settled = false;
+    let timeoutId: ReturnType<typeof globalThis.setTimeout> | null = null;
+    const finish = (result: boolean) => {
+      if (settled) {
+        return;
+      }
+      settled = true;
+      if (timeoutId !== null) {
+        globalThis.clearTimeout(timeoutId);
+      }
+      unsubscribe();
+      resolve(result);
+    };
+
+    const unsubscribe = appAtomRegistry.subscribe(shellAtom, (shell) => {
+      if (shell === null) {
+        return;
+      }
+      finish(true);
+    });
+
+    if (appAtomRegistry.get(shellAtom) !== null) {
+      finish(true);
+      return;
+    }
+
+    timeoutId = globalThis.setTimeout(() => {
+      finish(false);
+    }, timeoutMs);
+  });
 }
 
 export async function waitForStartedServerThread(

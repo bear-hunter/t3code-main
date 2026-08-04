@@ -82,6 +82,7 @@ import {
   type SidebarProjectSnapshot,
 } from "../sidebarProjectGrouping";
 import { legacyProjectCwdPreferenceKey, useUiStateStore } from "../uiStateStore";
+import { isSidechatHiddenFromThreadLists, useSidechatStore } from "../sidechatStore";
 import { useThreadSelectionStore } from "../threadSelectionStore";
 import { useThreadActions } from "../hooks/useThreadActions";
 import { useHandleNewThread } from "../hooks/useHandleNewThread";
@@ -1176,7 +1177,17 @@ const SidebarV2SearchResultRow = memo(function SidebarV2SearchResultRow(props: {
 export default function SidebarV2() {
   const projects = useProjects();
   const projectOrder = useUiStateStore((store) => store.projectOrder);
-  const threads = useThreadShells();
+  const allThreadShells = useThreadShells();
+  const promotedSidechatThreadKeys = useSidechatStore((store) => store.promotedThreadKeys);
+  // Sidechats stay out of the sidebar: they surface through their parent's
+  // tab strip (a promoted sidechat rejoins the list).
+  const threads = useMemo(
+    () =>
+      allThreadShells.filter(
+        (thread) => !isSidechatHiddenFromThreadLists(thread, promotedSidechatThreadKeys),
+      ),
+    [allThreadShells, promotedSidechatThreadKeys],
+  );
   const router = useRouter();
   const { isMobile, setOpenMobile } = useSidebar();
   const keybindings = useAtomValue(primaryServerKeybindingsAtom);

@@ -353,6 +353,11 @@ export const OrchestrationThread = Schema.Struct({
   id: ThreadId,
   projectId: ProjectId,
   title: TrimmedNonEmptyString,
+  // A thread with a parent is a sidechat: it starts from the parent's
+  // context but stays fully isolated from it. One level deep only.
+  // Optional so payloads from pre-sidechat servers still decode.
+  parentThreadId: Schema.optional(Schema.NullOr(ThreadId)),
+  spawnedAtMessageId: Schema.optional(Schema.NullOr(MessageId)),
   modelSelection: ModelSelection,
   runtimeMode: RuntimeMode,
   interactionMode: ProviderInteractionMode.pipe(
@@ -411,6 +416,10 @@ export const OrchestrationThreadShell = Schema.Struct({
   id: ThreadId,
   projectId: ProjectId,
   title: TrimmedNonEmptyString,
+  // Sidechat linkage (see OrchestrationThread). The shell carries it so
+  // sidebars can group or hide sidechats without a detail subscription.
+  parentThreadId: Schema.optional(Schema.NullOr(ThreadId)),
+  spawnedAtMessageId: Schema.optional(Schema.NullOr(MessageId)),
   modelSelection: ModelSelection,
   runtimeMode: RuntimeMode,
   interactionMode: ProviderInteractionMode.pipe(
@@ -557,6 +566,10 @@ const ThreadCreateCommand = Schema.Struct({
   threadId: ThreadId,
   projectId: ProjectId,
   title: TrimmedNonEmptyString,
+  /** Creates the thread as a sidechat of this parent (same project only). */
+  parentThreadId: Schema.optional(ThreadId),
+  /** Parent message the sidechat was spawned from, for provenance. */
+  spawnedAtMessageId: Schema.optional(MessageId),
   modelSelection: ModelSelection,
   runtimeMode: RuntimeMode,
   interactionMode: ProviderInteractionMode.pipe(
@@ -659,6 +672,8 @@ const ThreadInteractionModeSetCommand = Schema.Struct({
 const ThreadTurnStartBootstrapCreateThread = Schema.Struct({
   projectId: ProjectId,
   title: TrimmedNonEmptyString,
+  parentThreadId: Schema.optional(ThreadId),
+  spawnedAtMessageId: Schema.optional(MessageId),
   modelSelection: ModelSelection,
   runtimeMode: RuntimeMode,
   interactionMode: ProviderInteractionMode,
@@ -967,6 +982,8 @@ export const ThreadCreatedPayload = Schema.Struct({
   threadId: ThreadId,
   projectId: ProjectId,
   title: TrimmedNonEmptyString,
+  parentThreadId: Schema.optional(ThreadId),
+  spawnedAtMessageId: Schema.optional(MessageId),
   modelSelection: ModelSelection,
   runtimeMode: RuntimeMode.pipe(Schema.withDecodingDefault(Effect.succeed(DEFAULT_RUNTIME_MODE))),
   interactionMode: ProviderInteractionMode.pipe(

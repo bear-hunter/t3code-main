@@ -34,6 +34,10 @@ A Git worktree used as an isolated workspace for a thread. If a thread has a `wo
 
 The main durable unit of conversation and workspace history. In [the orchestration contracts][1], a thread holds messages, activities, checkpoints, and session-related state. See [projector.ts][4].
 
+#### Sidechat
+
+A secondary thread spawned from a main thread, marked by `parentThreadId` (plus `spawnedAtMessageId` for provenance) in [the contracts][1]. A sidechat inherits the parent's context at its first turn: adapters whose `sessionFork` capability is `"native"` (Claude) fork the parent's provider session under a new session id, while other providers fall back to a rendered transcript of the parent conversation prefixed to the first message. Either way it is a full thread with its own provider session, so nothing it says flows back into the parent. Sidechats stay one level deep — [decider.ts][8] rejects nesting and cross-project parents, and deleting a parent cascades to its sidechats. Clients surface them as tabs on the parent thread instead of sidebar rows.
+
 #### Turn
 
 A single user-to-assistant work cycle inside a thread. It starts with user input and ends when the session leaves `running` status, which [projector.ts][4] treats as the authoritative completion signal (`settledTurnStateForSessionStatus`). Checkpoint and diff work may settle afterward without changing when the turn ended. See [the contracts][1] and [ProviderRuntimeIngestion.ts][5].
