@@ -1574,6 +1574,11 @@ export const createBuildConfig = Effect.fn("createBuildConfig")(function* (
           schemes: ["t3code", "t3code-dev"],
         },
       ],
+      // Apple Silicon refuses to launch binaries with no signature at all, so
+      // unsigned builds still need an ad-hoc signature (identity "-").
+      // Hardened runtime only matters for notarization, which ad-hoc builds
+      // can't do anyway.
+      ...(signed ? {} : { identity: "-", hardenedRuntime: false }),
       ...(macPasskeySigning
         ? {
             entitlements: macPasskeySigning.entitlementsPath,
