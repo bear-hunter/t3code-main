@@ -84,6 +84,7 @@ import {
 import { legacyProjectCwdPreferenceKey, useUiStateStore } from "../uiStateStore";
 import { isSidechatHiddenFromThreadLists, useSidechatStore } from "../sidechatStore";
 import { useThreadSelectionStore } from "../threadSelectionStore";
+import { useProjectScopeStore } from "../projectScopeStore";
 import { useThreadActions } from "../hooks/useThreadActions";
 import { useHandleNewThread } from "../hooks/useHandleNewThread";
 import { openCommandPalette } from "../commandPaletteBus";
@@ -1386,7 +1387,9 @@ export default function SidebarV2() {
 
   // Project scope: one menu above the list. Scoping filters the list without
   // making the header width depend on the number or length of project names.
-  const [projectScopeKey, setProjectScopeKey] = useState<string | null>(null);
+  // Lives in a shared store so new-thread entry points can respect the scope.
+  const projectScopeKey = useProjectScopeStore((state) => state.projectScopeKey);
+  const setProjectScopeKey = useProjectScopeStore((state) => state.setProjectScopeKey);
   const scopedProjectGroup = useMemo(
     () =>
       projectScopeKey === null
@@ -2576,9 +2579,14 @@ export default function SidebarV2() {
   // uses. The command palette already offers a "New thread in..." submenu
   // for multi-project setups.
   const handleNewThreadClick = useCallback(() => {
+    if (isMobile) setOpenMobile(false);
+    // Scoped to one concrete project: create there directly, no picker.
+    if (scopedProjectGroup !== null && scopedProjectGroup.memberProjectRefs.length === 1) {
+      void newThreadContext.handleNewThread(scopedProjectGroup.memberProjectRefs[0]!);
+      return;
+    }
     // One project: nothing to pick, create immediately.
     if (projectGroups.length <= 1) {
-      if (isMobile) setOpenMobile(false);
       void startNewThreadFromContext({
         activeDraftThread: newThreadContext.activeDraftThread,
         activeThread: newThreadContext.activeThread ?? undefined,
@@ -2587,9 +2595,8 @@ export default function SidebarV2() {
       });
       return;
     }
-    if (isMobile) setOpenMobile(false);
     openCommandPalette({ open: "new-thread-in" });
-  }, [isMobile, newThreadContext, projectGroups.length, setOpenMobile]);
+  }, [isMobile, newThreadContext, projectGroups.length, scopedProjectGroup, setOpenMobile]);
 
   // Same resolution as v1: prefer the local-thread binding, fall back to
   // chat.new, no platform gating — web users have working shortcuts too.

@@ -19,6 +19,7 @@ import { selectThreadTerminalUiState, useTerminalUiStateStore } from "../termina
 import { isPreviewSupportedInRuntime } from "../previewStateStore";
 import { selectActiveRightPanel, useRightPanelStore } from "../rightPanelStore";
 import { useThreadSelectionStore } from "../threadSelectionStore";
+import { useProjectScopeStore } from "../projectScopeStore";
 import { stackedThreadToast, toastManager } from "~/components/ui/toast";
 import { primaryServerKeybindingsAtom } from "~/state/server";
 
@@ -32,16 +33,27 @@ function ChatRouteGlobalShortcuts() {
   const projectGroupingSettings = useClientSettings(selectProjectGroupingSettings);
   const projects = useProjects();
   const primaryEnvironmentId = usePrimaryEnvironmentId();
-  const projectGroupCount = useMemo(
+  const projectGroups = useMemo(
     () =>
       buildSidebarProjectSnapshots({
         projects,
         settings: projectGroupingSettings,
         primaryEnvironmentId,
         resolveEnvironmentLabel: () => null,
-      }).length,
+      }),
     [primaryEnvironmentId, projectGroupingSettings, projects],
   );
+  const projectGroupCount = projectGroups.length;
+  const projectScopeKey = useProjectScopeStore((state) => state.projectScopeKey);
+  // Scoped to one concrete project in the sidebar filter: new threads go
+  // there directly instead of routing through the palette picker.
+  const scopedProjectRef = useMemo(() => {
+    if (projectScopeKey === null) return null;
+    const scopedGroup = projectGroups.find((group) => group.projectKey === projectScopeKey);
+    return scopedGroup !== undefined && scopedGroup.memberProjectRefs.length === 1
+      ? scopedGroup.memberProjectRefs[0]!
+      : null;
+  }, [projectGroups, projectScopeKey]);
   const terminalOpen = useTerminalUiStateStore((state) =>
     routeThreadRef
       ? selectThreadTerminalUiState(state.terminalUiStateByThreadKey, routeThreadRef).terminalOpen
@@ -94,7 +106,12 @@ function ChatRouteGlobalShortcuts() {
         event.stopPropagation();
         // Sidebar v2 routes creation through the command palette whenever
         // there is a real choice to make; v1 (and single-project setups)
-        // keep the immediate contextual create.
+        // keep the immediate contextual create. A sidebar project scope
+        // removes the choice, so it creates directly in the scoped project.
+        if (sidebarV2Enabled && scopedProjectRef !== null) {
+          void handleNewThread(scopedProjectRef);
+          return;
+        }
         if (sidebarV2Enabled && projectGroupCount > 1) {
           openCommandPalette({ open: "new-thread-in" });
           return;
@@ -166,6 +183,7 @@ function ChatRouteGlobalShortcuts() {
     previewOpen,
     projectGroupCount,
     routeThreadRef,
+    scopedProjectRef,
     selectedThreadKeysSize,
     sidebarV2Enabled,
     terminalOpen,
