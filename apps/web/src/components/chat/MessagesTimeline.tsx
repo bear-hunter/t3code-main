@@ -50,6 +50,7 @@ import {
   MessageCircleIcon,
   MousePointerClickIcon,
   PaintbrushIcon,
+  PencilIcon,
   MinusIcon,
   SquarePenIcon,
   TerminalIcon,
@@ -131,6 +132,7 @@ interface TimelineRowSharedState {
   skills: ReadonlyArray<Pick<ServerProviderSkill, "name" | "displayName">>;
   activeThreadEnvironmentId: EnvironmentId;
   onRevertUserMessage: (messageId: MessageId) => void;
+  onEditUserMessage: (messageId: MessageId, visibleText: string) => void;
   onImageExpand: (preview: ExpandedImagePreview) => void;
   onOpenTurnDiff: (turnId: TurnId, filePath?: string) => void;
   onToggleTurnFold: (turnId: TurnId) => void;
@@ -168,6 +170,7 @@ interface MessagesTimelineProps {
   onOpenTurnDiff: (turnId: TurnId, filePath?: string) => void;
   revertTurnCountByUserMessageId: Map<MessageId, number>;
   onRevertUserMessage: (messageId: MessageId) => void;
+  onEditUserMessage: (messageId: MessageId, visibleText: string) => void;
   isRevertingCheckpoint: boolean;
   onImageExpand: (preview: ExpandedImagePreview) => void;
   activeThreadEnvironmentId: EnvironmentId;
@@ -203,6 +206,7 @@ export const MessagesTimeline = memo(function MessagesTimeline({
   onOpenTurnDiff,
   revertTurnCountByUserMessageId,
   onRevertUserMessage,
+  onEditUserMessage,
   isRevertingCheckpoint,
   onImageExpand,
   activeThreadEnvironmentId,
@@ -426,6 +430,7 @@ export const MessagesTimeline = memo(function MessagesTimeline({
       skills,
       activeThreadEnvironmentId,
       onRevertUserMessage,
+      onEditUserMessage,
       onImageExpand,
       onOpenTurnDiff,
       onToggleTurnFold,
@@ -440,6 +445,7 @@ export const MessagesTimeline = memo(function MessagesTimeline({
       skills,
       activeThreadEnvironmentId,
       onRevertUserMessage,
+      onEditUserMessage,
       onImageExpand,
       onOpenTurnDiff,
       onToggleTurnFold,
@@ -959,6 +965,12 @@ function UserTimelineRow({ row }: { row: Extract<TimelineRow, { kind: "message" 
             </TooltipPopup>
           </Tooltip>
           <div className="flex items-center gap-0.5">
+            {canRevertAgentWork && (
+              <EditUserMessageButton
+                messageId={row.message.id}
+                visibleText={elementContextState.promptText}
+              />
+            )}
             {canRevertAgentWork && <RevertUserMessageButton messageId={row.message.id} />}
             {displayedUserMessage.copyText && (
               <MessageCopyButton text={displayedUserMessage.copyText} variant="ghost" />
@@ -967,6 +979,37 @@ function UserTimelineRow({ row }: { row: Extract<TimelineRow, { kind: "message" 
         </div>
       </div>
     </div>
+  );
+}
+
+function EditUserMessageButton({
+  messageId,
+  visibleText,
+}: {
+  messageId: MessageId;
+  visibleText: string;
+}) {
+  const ctx = use(TimelineRowCtx);
+  const activity = use(TimelineRowActivityCtx);
+
+  return (
+    <Tooltip>
+      <TooltipTrigger
+        render={
+          <Button
+            type="button"
+            size="xs"
+            variant="ghost"
+            disabled={activity.isRevertingCheckpoint || activity.isWorking}
+            onClick={() => ctx.onEditUserMessage(messageId, visibleText)}
+            aria-label="Edit this message"
+          />
+        }
+      >
+        <PencilIcon className="size-3" />
+      </TooltipTrigger>
+      <TooltipPopup side="top">Edit this message</TooltipPopup>
+    </Tooltip>
   );
 }
 

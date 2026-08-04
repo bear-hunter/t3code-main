@@ -4640,20 +4640,20 @@ function ChatViewContent(props: ChatViewProps) {
   ]);
 
   const onRevertToTurnCount = useCallback(
-    async (turnCount: number) => {
+    async (turnCount: number): Promise<boolean> => {
       const localApi = readLocalApi();
-      if (!localApi || !activeThread || isRevertingCheckpoint) return;
+      if (!localApi || !activeThread || isRevertingCheckpoint) return false;
 
       if (activeEnvironmentUnavailable && activeEnvironmentUnavailableLabel) {
         setThreadError(
           activeThread.id,
           `Reconnect ${activeEnvironmentUnavailableLabel} before reverting checkpoints.`,
         );
-        return;
+        return false;
       }
       if (phase === "running" || isSendBusy || isConnecting) {
         setThreadError(activeThread.id, "Interrupt the current turn before reverting checkpoints.");
-        return;
+        return false;
       }
       const confirmed = await localApi.dialogs.confirm(
         [
@@ -4663,7 +4663,7 @@ function ChatViewContent(props: ChatViewProps) {
         ].join("\n"),
       );
       if (!confirmed) {
-        return;
+        return false;
       }
 
       setIsRevertingCheckpoint(true);
@@ -4675,7 +4675,8 @@ function ChatViewContent(props: ChatViewProps) {
           turnCount,
         },
       });
-      if (result._tag === "Failure" && !isAtomCommandInterrupted(result)) {
+      const failed = result._tag === "Failure" && !isAtomCommandInterrupted(result);
+      if (failed) {
         const error = squashAtomCommandFailure(result);
         setThreadError(
           activeThread.id,
@@ -4683,6 +4684,7 @@ function ChatViewContent(props: ChatViewProps) {
         );
       }
       setIsRevertingCheckpoint(false);
+      return !failed;
     },
     [
       activeThread,
@@ -5796,6 +5798,31 @@ function ChatViewContent(props: ChatViewProps) {
     }
     void onRevertToTurnCountRef.current(targetTurnCount);
   }, []);
+  // Edit = revert to the checkpoint before the message, then hand the
+  // original prompt back to the composer for editing and resend.
+  const onEditUserMessageCtxRef = useRef({
+    composerDraftTarget,
+    setComposerDraftPrompt,
+  });
+  onEditUserMessageCtxRef.current = { composerDraftTarget, setComposerDraftPrompt };
+  const onEditUserMessage = useCallback((messageId: MessageId, visibleText: string) => {
+    const targetTurnCount = revertTurnCountRef.current.get(messageId);
+    if (typeof targetTurnCount !== "number") {
+      return;
+    }
+    void onRevertToTurnCountRef.current(targetTurnCount).then((reverted) => {
+      if (!reverted) return;
+      const { composerDraftTarget, setComposerDraftPrompt } = onEditUserMessageCtxRef.current;
+      promptRef.current = visibleText;
+      setComposerDraftPrompt(composerDraftTarget, visibleText);
+      composerRef.current?.resetCursorState({
+        cursor: collapseExpandedComposerCursor(visibleText, visibleText.length),
+        prompt: visibleText,
+        detectTrigger: true,
+      });
+      requestAnimationFrame(() => composerRef.current?.focusAtEnd());
+    });
+  }, []);
 
   // Empty state: no active thread
   if (!activeThread) {
@@ -5998,6 +6025,7 @@ function ChatViewContent(props: ChatViewProps) {
                 onOpenTurnDiff={onOpenTurnDiff}
                 revertTurnCountByUserMessageId={revertTurnCountByUserMessageId}
                 onRevertUserMessage={onRevertUserMessage}
+                onEditUserMessage={onEditUserMessage}
                 isRevertingCheckpoint={isRevertingCheckpoint}
                 onImageExpand={onExpandTimelineImage}
                 markdownCwd={gitCwd ?? undefined}
