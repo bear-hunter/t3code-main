@@ -225,7 +225,7 @@ import {
   buildSidechatSeedPrompt,
   SIDECHAT_DEFAULT_TITLE,
 } from "@t3tools/client-runtime/state/sidechat";
-import { SidechatTabBar } from "./SidechatTabBar";
+import { SidechatPanel } from "./SidechatPanel";
 import { useSidechatStore } from "../sidechatStore";
 import { onSpawnSidechatRequest } from "../sidechatBus";
 import { environmentShell } from "../state/shell";
@@ -484,11 +484,16 @@ type ChatViewProps =
       routeKind: "server";
       draftId?: never;
       /**
-       * The routed thread when this view can host sidechat tabs. `threadId`
-       * is the displayed tab (the parent itself, or one of its sidechats
-       * selected via the `?sidechat=` search param).
+       * The parent thread whose sidechats this view can host (the routed
+       * thread), or — for an embedded sidechat instance — the sidechat's
+       * parent, so the seed pipeline can read the parent detail.
        */
       sidechatParentThreadId?: ThreadId;
+      /**
+       * "embedded" renders this view inside the right panel's sidechat
+       * surface: no header, no right panel of its own, no global listeners.
+       */
+      surfaceMode?: "embedded";
     }
   | {
       environmentId: EnvironmentId;
@@ -1169,6 +1174,7 @@ function ChatViewContent(props: ChatViewProps) {
     forceExpandedMobileComposer = false,
   } = props;
   const draftId = routeKind === "draft" ? props.draftId : null;
+  const isEmbedded = routeKind === "server" && props.surfaceMode === "embedded";
   const threadSyncPhase = routeKind === "server" ? (props.threadSyncPhase ?? null) : null;
   const threadDetailLoading = threadSyncPhase === "loading";
   const handleNewThread = useNewThreadHandler();
@@ -1294,7 +1300,10 @@ function ChatViewContent(props: ChatViewProps) {
   const composerTerminalContextsRef = useRef<TerminalContextDraft[]>([]);
   const composerElementContextsRef = useRef<ElementContextDraft[]>([]);
   const localComposerRef = useRef<ChatComposerHandle | null>(null);
-  const composerRef = useComposerHandleContext() ?? localComposerRef;
+  const contextComposerRef = useComposerHandleContext();
+  // An embedded instance must not share the app-level composer handle with the
+  // main view — two mounted composers writing one ref means last-mount wins.
+  const composerRef = isEmbedded ? localComposerRef : (contextComposerRef ?? localComposerRef);
   const [showScrollToBottom, setShowScrollToBottom] = useState(false);
   const [expandedImage, setExpandedImage] = useState<ExpandedImagePreview | null>(null);
   const [optimisticUserMessages, setOptimisticUserMessages] = useState<ChatMessage[]>([]);
@@ -1480,8 +1489,9 @@ function ChatViewContent(props: ChatViewProps) {
   const isLocalDraftThread = !isServerThread && localDraftThread !== undefined;
   const canCheckoutPullRequestIntoThread = isLocalDraftThread;
   const activeThreadId = activeThread?.id ?? null;
-  // Sidechat tabs: `threadId` is the displayed tab; the routed (parent)
-  // thread arrives via `sidechatParentThreadId` on server routes.
+  // The parent thread whose sidechats the right-panel surface hosts (the
+  // routed thread), or — for an embedded sidechat instance — the sidechat's
+  // parent so the seed pipeline can read the parent detail.
   const sidechatParentThreadId =
     routeKind === "server" ? (props.sidechatParentThreadId ?? null) : null;
   const sidechatParentRef = useMemo(
@@ -1491,35 +1501,13 @@ function ChatViewContent(props: ChatViewProps) {
         : null,
     [environmentId, sidechatParentThreadId],
   );
-  // Deduped with the displayed thread's subscription while the Main tab is
-  // active; while a sidechat is displayed this keeps the parent detail warm
-  // so spawning a sibling can build its seed transcript.
+  // Deduped with the displayed thread's subscription on the routed view;
+  // in an embedded sidechat this keeps the parent detail warm so the seed
+  // pipeline can gate on the parent's session.
   const sidechatParentDetail = useThreadDetail(sidechatParentRef);
-  const activeSidechatId =
-    sidechatParentThreadId !== null && sidechatParentThreadId !== threadId ? threadId : null;
   const registerSpawnedSidechat = useSidechatStore((store) => store.registerSpawnedSidechat);
   const clearSidechatPendingSeed = useSidechatStore((store) => store.clearPendingSeed);
   const sidechatSpawnInFlightRef = useRef(false);
-
-  const selectSidechatTab = useCallback(
-    (sidechatThreadId: ThreadId) => {
-      if (sidechatParentThreadId === null) return;
-      void navigate({
-        to: "/$environmentId/$threadId",
-        params: { environmentId, threadId: sidechatParentThreadId },
-        search: { sidechat: sidechatThreadId },
-      });
-    },
-    [environmentId, navigate, sidechatParentThreadId],
-  );
-  const selectMainSidechatTab = useCallback(() => {
-    if (sidechatParentThreadId === null) return;
-    void navigate({
-      to: "/$environmentId/$threadId",
-      params: { environmentId, threadId: sidechatParentThreadId },
-      search: {},
-    });
-  }, [environmentId, navigate, sidechatParentThreadId]);
 
   const spawnSidechat = useCallback(async () => {
     const parentThread = sidechatParentDetail;
@@ -1576,7 +1564,7 @@ function ChatViewContent(props: ChatViewProps) {
       await settlePromise(() =>
         waitForThreadShell(scopeThreadRef(environmentId, sidechatThreadId)),
       );
-      selectSidechatTab(sidechatThreadId);
+      useRightPanelStore.getState().openSidechat(sidechatParentRef, sidechatThreadId);
     } finally {
       sidechatSpawnInFlightRef.current = false;
     }
@@ -1585,14 +1573,17 @@ function ChatViewContent(props: ChatViewProps) {
     environmentId,
     registerSpawnedSidechat,
     routeKind,
-    selectSidechatTab,
     sidechatParentDetail,
     sidechatParentRef,
   ]);
 
   // Entry points outside this component (command palette) request spawns
-  // over the sidechat bus.
-  useEffect(() => onSpawnSidechatRequest(() => void spawnSidechat()), [spawnSidechat]);
+  // over the sidechat bus. Only the routed view spawns; an embedded
+  // instance subscribing too would double-spawn.
+  useEffect(() => {
+    if (isEmbedded) return;
+    return onSpawnSidechatRequest(() => void spawnSidechat());
+  }, [isEmbedded, spawnSidechat]);
   const runningTerminalIds = useThreadRunningTerminalIds({
     environmentId: activeThread?.environmentId ?? null,
     threadId: activeThreadId,
@@ -1670,7 +1661,9 @@ function ChatViewContent(props: ChatViewProps) {
     [activeKnownTerminalIds, panelTerminalIds],
   );
   const previewPanelOpen = activeRightPanelKind === "preview" && isPreviewSupportedInRuntime();
-  const rightPanelOpen = rightPanelState.isOpen;
+  // Embedded instances never render their own right panel, so stale persisted
+  // panel state on the sidechat thread must stay inert.
+  const rightPanelOpen = !isEmbedded && rightPanelState.isOpen;
   const canMaximizeRightPanel = rightPanelOpen && !shouldUsePlanSidebarSheet;
   const rightPanelMaximized =
     canMaximizeRightPanel && maximizedRightPanelThreadKey === routeThreadKey;
@@ -3263,6 +3256,10 @@ function ChatViewContent(props: ChatViewProps) {
     if (!activeThreadRef || !activeProject) return;
     useRightPanelStore.getState().open(activeThreadRef, "files");
   }, [activeProject, activeThreadRef]);
+  const addSidechatSurface = useCallback(() => {
+    if (!activeThreadRef || !isServerThread) return;
+    useRightPanelStore.getState().open(activeThreadRef, "sidechat");
+  }, [activeThreadRef, isServerThread]);
   const openFileSurface = useCallback(
     (relativePath: string) => {
       if (!activeThreadRef || !activeProject) return;
@@ -3549,13 +3546,12 @@ function ChatViewContent(props: ChatViewProps) {
       },
     );
   }, []);
-  useEffect(
-    () =>
-      subscribePreviewAction((action) => {
-        if (action === "toggle-panel") togglePreviewPanel();
-      }),
-    [togglePreviewPanel],
-  );
+  useEffect(() => {
+    if (isEmbedded) return;
+    return subscribePreviewAction((action) => {
+      if (action === "toggle-panel") togglePreviewPanel();
+    });
+  }, [isEmbedded, togglePreviewPanel]);
   const persistThreadSettingsForNextTurn = useCallback(
     async (input: {
       threadId: ThreadId;
@@ -3970,6 +3966,8 @@ function ChatViewContent(props: ChatViewProps) {
   // Auto-open the plan sidebar when plan/todo steps arrive for the current turn.
   // Don't auto-open for plans carried over from a previous turn (the user can open manually).
   useEffect(() => {
+    // An embedded sidechat has no panel of its own to open.
+    if (isEmbedded) return;
     if (!autoOpenPlanSidebar) return;
     if (!activePlan) return;
     if (planSidebarOpen) return;
@@ -3985,6 +3983,7 @@ function ChatViewContent(props: ChatViewProps) {
     activeLatestTurn?.turnId,
     activeThreadRef,
     autoOpenPlanSidebar,
+    isEmbedded,
     planSidebarOpen,
     sidebarProposedPlan?.turnId,
   ]);
@@ -4484,6 +4483,9 @@ function ChatViewContent(props: ChatViewProps) {
   }, [activeThreadKey, focusComposer, terminalUiState.terminalOpen]);
 
   useEffect(() => {
+    // Global shortcuts belong to the routed view; a second embedded listener
+    // would double-fire every command.
+    if (isEmbedded) return;
     const handler = (event: globalThis.KeyboardEvent) => {
       if (!activeThreadId || isCommandPaletteOpen()) {
         return;
@@ -4624,6 +4626,7 @@ function ChatViewContent(props: ChatViewProps) {
     closeTerminal,
     closePanelTerminal,
     createNewTerminal,
+    isEmbedded,
     setTerminalOpen,
     runProjectScript,
     spawnSidechat,
@@ -5872,6 +5875,14 @@ function ChatViewContent(props: ChatViewProps) {
         timestampFormat={timestampFormat}
         mode="embedded"
       />
+    ) : activeRightPanelSurface?.kind === "sidechat" ? (
+      <SidechatPanel
+        environmentId={environmentId}
+        parentThreadRef={activeThreadRef}
+        surface={activeRightPanelSurface}
+        onSpawnSidechat={() => void spawnSidechat()}
+        spawnDisabled={sidechatParentDetail === null}
+      />
     ) : (activeRightPanelSurface?.kind === "files" || activeRightPanelSurface?.kind === "file") &&
       activeProject &&
       activeWorkspaceRoot ? (
@@ -5907,56 +5918,47 @@ function ChatViewContent(props: ChatViewProps) {
         )}
         data-chat-column-maximized-away={rightPanelMaximized ? "true" : "false"}
       >
-        {/* Top bar */}
-        <header
-          data-chat-header
-          className={cn(
-            "bg-background transition-[padding-left] duration-200 ease-linear motion-reduce:transition-none",
-            isElectron
-              ? cn(
-                  "workspace-topbar drag-region relative px-3 sm:px-5",
-                  reserveTitleBarControlInset &&
-                    !inlineRightPanelOwnsTitleBar &&
-                    "wco:pr-[var(--workspace-native-controls-inset)]",
-                )
-              : "workspace-topbar pl-[calc(env(safe-area-inset-left)+0.75rem)] pr-[calc(env(safe-area-inset-right)+0.75rem)] sm:pl-[calc(env(safe-area-inset-left)+1.25rem)] sm:pr-[calc(env(safe-area-inset-right)+1.25rem)]",
-            COLLAPSED_SIDEBAR_TITLEBAR_INSET_CLASS,
-          )}
-        >
-          {!rightPanelOpen ? panelLayoutControls : null}
-          <ChatHeader
-            activeThreadEnvironmentId={activeThread.environmentId}
-            activeThreadId={activeThread.id}
-            {...(routeKind === "draft" && draftId ? { draftId } : {})}
-            activeThreadTitle={activeThread.title}
-            activeProjectName={activeProject?.title}
-            activeProjectCwd={activeProject?.workspaceRoot ?? null}
-            openInCwd={gitCwd}
-            activeProjectScripts={activeProject?.scripts}
-            preferredScriptId={
-              activeProject ? (lastInvokedScriptByProjectId[activeProject.id] ?? null) : null
-            }
-            keybindings={keybindings}
-            availableEditors={availableEditors}
-            rightPanelOpen={rightPanelOpen}
-            gitCwd={gitCwd}
-            onNewThreadInProject={handleNewThreadInActiveProject}
-            onRunProjectScript={runProjectScript}
-            onAddProjectScript={saveProjectScript}
-            onUpdateProjectScript={updateProjectScript}
-            onDeleteProjectScript={deleteProjectScript}
-          />
-        </header>
-
-        {sidechatParentRef !== null ? (
-          <SidechatTabBar
-            parentThreadRef={sidechatParentRef}
-            activeSidechatId={activeSidechatId}
-            onSelectMain={selectMainSidechatTab}
-            onSelectSidechat={selectSidechatTab}
-            onSpawnSidechat={() => void spawnSidechat()}
-            spawnDisabled={sidechatParentDetail === null}
-          />
+        {/* Top bar — an embedded sidechat's chrome is the surface tab strip. */}
+        {!isEmbedded ? (
+          <header
+            data-chat-header
+            className={cn(
+              "bg-background transition-[padding-left] duration-200 ease-linear motion-reduce:transition-none",
+              isElectron
+                ? cn(
+                    "workspace-topbar drag-region relative px-3 sm:px-5",
+                    reserveTitleBarControlInset &&
+                      !inlineRightPanelOwnsTitleBar &&
+                      "wco:pr-[var(--workspace-native-controls-inset)]",
+                  )
+                : "workspace-topbar pl-[calc(env(safe-area-inset-left)+0.75rem)] pr-[calc(env(safe-area-inset-right)+0.75rem)] sm:pl-[calc(env(safe-area-inset-left)+1.25rem)] sm:pr-[calc(env(safe-area-inset-right)+1.25rem)]",
+              COLLAPSED_SIDEBAR_TITLEBAR_INSET_CLASS,
+            )}
+          >
+            {!rightPanelOpen ? panelLayoutControls : null}
+            <ChatHeader
+              activeThreadEnvironmentId={activeThread.environmentId}
+              activeThreadId={activeThread.id}
+              {...(routeKind === "draft" && draftId ? { draftId } : {})}
+              activeThreadTitle={activeThread.title}
+              activeProjectName={activeProject?.title}
+              activeProjectCwd={activeProject?.workspaceRoot ?? null}
+              openInCwd={gitCwd}
+              activeProjectScripts={activeProject?.scripts}
+              preferredScriptId={
+                activeProject ? (lastInvokedScriptByProjectId[activeProject.id] ?? null) : null
+              }
+              keybindings={keybindings}
+              availableEditors={availableEditors}
+              rightPanelOpen={rightPanelOpen}
+              gitCwd={gitCwd}
+              onNewThreadInProject={handleNewThreadInActiveProject}
+              onRunProjectScript={runProjectScript}
+              onAddProjectScript={saveProjectScript}
+              onUpdateProjectScript={updateProjectScript}
+              onDeleteProjectScript={deleteProjectScript}
+            />
+          </header>
         ) : null}
 
         <ThreadErrorBanner
@@ -6215,7 +6217,7 @@ function ChatViewContent(props: ChatViewProps) {
               </div>
             </div>
 
-            {activeThreadRef && activePreviewMiniPlayer ? (
+            {!isEmbedded && activeThreadRef && activePreviewMiniPlayer ? (
               <ThreadPreviewMiniPlayer
                 key={`${activeThreadKey}:${activePreviewMiniPlayer.tabId}`}
                 threadRef={activeThreadRef}
@@ -6275,24 +6277,30 @@ function ChatViewContent(props: ChatViewProps) {
         </div>
         {/* end horizontal flex container */}
 
-        {mountedTerminalThreadRefs.map(({ key: mountedThreadKey, threadRef: mountedThreadRef }) => (
-          <PersistentThreadTerminalDrawer
-            key={mountedThreadKey}
-            threadRef={mountedThreadRef}
-            threadId={mountedThreadRef.threadId}
-            visible={mountedThreadKey === activeThreadKey && terminalUiState.terminalOpen}
-            launchContext={
-              mountedThreadKey === activeThreadKey ? (activeTerminalLaunchContext ?? null) : null
-            }
-            focusRequestId={mountedThreadKey === activeThreadKey ? terminalFocusRequestId : 0}
-            splitShortcutLabel={splitTerminalShortcutLabel ?? undefined}
-            splitVerticalShortcutLabel={splitTerminalVerticalShortcutLabel ?? undefined}
-            newShortcutLabel={newTerminalShortcutLabel ?? undefined}
-            closeShortcutLabel={closeTerminalShortcutLabel ?? undefined}
-            keybindings={keybindings}
-            onAddTerminalContext={addTerminalContextToDraft}
-          />
-        ))}
+        {isEmbedded
+          ? null
+          : mountedTerminalThreadRefs.map(
+              ({ key: mountedThreadKey, threadRef: mountedThreadRef }) => (
+                <PersistentThreadTerminalDrawer
+                  key={mountedThreadKey}
+                  threadRef={mountedThreadRef}
+                  threadId={mountedThreadRef.threadId}
+                  visible={mountedThreadKey === activeThreadKey && terminalUiState.terminalOpen}
+                  launchContext={
+                    mountedThreadKey === activeThreadKey
+                      ? (activeTerminalLaunchContext ?? null)
+                      : null
+                  }
+                  focusRequestId={mountedThreadKey === activeThreadKey ? terminalFocusRequestId : 0}
+                  splitShortcutLabel={splitTerminalShortcutLabel ?? undefined}
+                  splitVerticalShortcutLabel={splitTerminalVerticalShortcutLabel ?? undefined}
+                  newShortcutLabel={newTerminalShortcutLabel ?? undefined}
+                  closeShortcutLabel={closeTerminalShortcutLabel ?? undefined}
+                  keybindings={keybindings}
+                  onAddTerminalContext={addTerminalContextToDraft}
+                />
+              ),
+            )}
       </div>
 
       {!shouldUsePlanSidebarSheet && rightPanelOpen && activeThreadRef ? (
@@ -6314,9 +6322,11 @@ function ChatViewContent(props: ChatViewProps) {
           onAddTerminal={addTerminalSurface}
           onAddDiff={addDiffSurface}
           onAddFiles={addFilesSurface}
+          onAddSidechat={addSidechatSurface}
           browserAvailable={isPreviewSupportedInRuntime()}
           diffAvailable={isServerThread && isGitRepo}
           filesAvailable={activeProject !== null}
+          sidechatAvailable={isServerThread && activeThread.parentThreadId == null}
         >
           {rightPanelContent}
         </RightPanelTabs>
@@ -6341,9 +6351,11 @@ function ChatViewContent(props: ChatViewProps) {
             onAddTerminal={addTerminalSurface}
             onAddDiff={addDiffSurface}
             onAddFiles={addFilesSurface}
+            onAddSidechat={addSidechatSurface}
             browserAvailable={isPreviewSupportedInRuntime()}
             diffAvailable={isServerThread && isGitRepo}
             filesAvailable={activeProject !== null}
+            sidechatAvailable={isServerThread && activeThread.parentThreadId == null}
           >
             {rightPanelContent}
           </RightPanelTabs>

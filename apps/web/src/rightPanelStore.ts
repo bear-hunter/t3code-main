@@ -8,13 +8,21 @@
  * workspace paths, and diff/plan/files remain singleton surfaces.
  */
 import { scopedThreadKey } from "@t3tools/client-runtime/environment";
-import type { ScopedThreadRef } from "@t3tools/contracts";
+import type { ScopedThreadRef, ThreadId } from "@t3tools/contracts";
 import { create } from "zustand";
 import { createJSONStorage, persist } from "zustand/middleware";
 
 import { resolveStorage } from "./lib/storage";
 
-export const RIGHT_PANEL_KINDS = ["plan", "diff", "files", "file", "preview", "terminal"] as const;
+export const RIGHT_PANEL_KINDS = [
+  "plan",
+  "diff",
+  "files",
+  "file",
+  "preview",
+  "terminal",
+  "sidechat",
+] as const;
 export type RightPanelKind = (typeof RIGHT_PANEL_KINDS)[number];
 
 export type RightPanelSurface =
@@ -30,6 +38,7 @@ export type RightPanelSurface =
     }
   | { id: "diff"; kind: "diff" }
   | { id: "files"; kind: "files" }
+  | { id: "sidechat"; kind: "sidechat"; activeSidechatId: ThreadId | null }
   | {
       id: `file:${string}`;
       kind: "file";
@@ -54,6 +63,7 @@ interface RightPanelStoreState {
   openBrowser: (ref: ScopedThreadRef, tabId: string | null) => void;
   openFile: (ref: ScopedThreadRef, relativePath: string, line?: number) => void;
   openTerminal: (ref: ScopedThreadRef, terminalId: string) => void;
+  openSidechat: (ref: ScopedThreadRef, sidechatThreadId: ThreadId | null) => void;
   splitTerminal: (
     ref: ScopedThreadRef,
     surfaceId: string,
@@ -92,6 +102,8 @@ const singletonSurface = (
       return { id: "files", kind };
     case "plan":
       return { id: "plan", kind };
+    case "sidechat":
+      return { id: "sidechat", kind, activeSidechatId: null };
   }
 };
 
@@ -291,6 +303,23 @@ export const useRightPanelStore = create<RightPanelStoreState>()(
           byThreadKey: updateThread(state.byThreadKey, scopedThreadKey(ref), (current) =>
             upsertSurface(current, terminalSurface(terminalId)),
           ),
+        })),
+      openSidechat: (ref, sidechatThreadId) =>
+        set((state) => ({
+          byThreadKey: updateThread(state.byThreadKey, scopedThreadKey(ref), (current) => {
+            const surface: RightPanelSurface = {
+              id: "sidechat",
+              kind: "sidechat",
+              activeSidechatId: sidechatThreadId,
+            };
+            return {
+              isOpen: true,
+              activeSurfaceId: surface.id,
+              surfaces: current.surfaces.some((entry) => entry.id === surface.id)
+                ? current.surfaces.map((entry) => (entry.id === surface.id ? surface : entry))
+                : [...current.surfaces, surface],
+            };
+          }),
         })),
       splitTerminal: (ref, surfaceId, terminalId, direction = "horizontal") =>
         set((state) => ({

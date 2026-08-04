@@ -450,9 +450,9 @@ export function shouldApplySidechatSeed(input: {
 
 /**
  * Resolves once the thread's shell row lands in the client store (or the
- * timeout passes). Used after spawning a sidechat: the `?sidechat=` tab only
- * activates once the shell exists, so navigating before it arrives would
- * briefly render the Main tab instead of the new sidechat.
+ * timeout passes). Used after spawning a sidechat: the panel tab only has a
+ * shell to render once it exists, so activating it before it arrives would
+ * briefly flash an empty tab.
  */
 export async function waitForThreadShell(
   threadRef: ScopedThreadRef,

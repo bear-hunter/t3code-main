@@ -316,6 +316,60 @@ describe("rightPanelStore", () => {
     expect(state.activeSurfaceId).toBe("terminal:term-2");
   });
 
+  it("opens the sidechat surface and tracks the active sidechat tab", () => {
+    useRightPanelStore.getState().openSidechat(refA, ThreadId.make("sidechat-1"));
+
+    expect(selectThreadRightPanelState(useRightPanelStore.getState().byThreadKey, refA)).toEqual({
+      isOpen: true,
+      activeSurfaceId: "sidechat",
+      surfaces: [{ id: "sidechat", kind: "sidechat", activeSidechatId: "sidechat-1" }],
+    });
+
+    useRightPanelStore.getState().openSidechat(refA, ThreadId.make("sidechat-2"));
+    expect(selectActiveRightPanelSurface(useRightPanelStore.getState().byThreadKey, refA)).toEqual({
+      id: "sidechat",
+      kind: "sidechat",
+      activeSidechatId: "sidechat-2",
+    });
+
+    useRightPanelStore.getState().openSidechat(refA, null);
+    const state = selectThreadRightPanelState(useRightPanelStore.getState().byThreadKey, refA);
+    expect(state.surfaces).toEqual([{ id: "sidechat", kind: "sidechat", activeSidechatId: null }]);
+    expect(state.surfaces).toHaveLength(1);
+  });
+
+  it("opening the sidechat surface via open() creates the singleton with no active tab", () => {
+    useRightPanelStore.getState().open(refA, "sidechat");
+
+    expect(selectThreadRightPanelState(useRightPanelStore.getState().byThreadKey, refA)).toEqual({
+      isOpen: true,
+      activeSurfaceId: "sidechat",
+      surfaces: [{ id: "sidechat", kind: "sidechat", activeSidechatId: null }],
+    });
+  });
+
+  it("passes a persisted sidechat surface through migration", () => {
+    expect(
+      migratePersistedRightPanelState({
+        byThreadKey: {
+          "env-1:thread-A": {
+            isOpen: true,
+            activeSurfaceId: "sidechat",
+            surfaces: [{ id: "sidechat", kind: "sidechat", activeSidechatId: "sidechat-1" }],
+          },
+        },
+      }),
+    ).toEqual({
+      byThreadKey: {
+        "env-1:thread-A": {
+          isOpen: true,
+          activeSurfaceId: "sidechat",
+          surfaces: [{ id: "sidechat", kind: "sidechat", activeSidechatId: "sidechat-1" }],
+        },
+      },
+    });
+  });
+
   it("tracks split panes and the active pane within a terminal surface", () => {
     useRightPanelStore.getState().openTerminal(refA, "term-1");
     useRightPanelStore.getState().splitTerminal(refA, "terminal:term-1", "term-2");

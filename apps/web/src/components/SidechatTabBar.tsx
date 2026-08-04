@@ -1,28 +1,28 @@
 import type { ContextMenuItem, ScopedThreadRef, ThreadId } from "@t3tools/contracts";
 import { scopeThreadRef } from "@t3tools/client-runtime/environment";
 import { History, MessageSquareText, Plus, X } from "lucide-react";
-import { type MouseEvent as ReactMouseEvent, useCallback, useEffect, useMemo, useRef } from "react";
-import { useShallow } from "zustand/react/shallow";
+import { type MouseEvent as ReactMouseEvent, useCallback, useEffect, useRef } from "react";
 
 import { cn } from "~/lib/utils";
 import { readLocalApi } from "~/localApi";
 import { useThreadActions } from "~/hooks/useThreadActions";
-import {
-  resolveSidechatTabs,
-  selectParentSidechatTabsState,
-  useSidechatStore,
-} from "~/sidechatStore";
-import { useThreadShells } from "~/state/entities";
+import { useSidechatStore } from "~/sidechatStore";
 import { Menu, MenuItem, MenuPopup, MenuTrigger } from "~/components/ui/menu";
 import { ScrollArea } from "~/components/ui/scroll-area";
 import { Tooltip, TooltipPopup, TooltipTrigger } from "~/components/ui/tooltip";
 
+export interface SidechatTab {
+  id: ThreadId;
+  title: string;
+}
+
 interface SidechatTabBarProps {
   parentThreadRef: ScopedThreadRef;
-  /** Sidechat currently displayed, or null when the Main tab is active. */
+  /** Sidechat currently displayed in the panel, or null when none is. */
   activeSidechatId: ThreadId | null;
-  onSelectMain: () => void;
-  onSelectSidechat: (sidechatThreadId: ThreadId) => void;
+  openTabs: ReadonlyArray<SidechatTab>;
+  closedTabs: ReadonlyArray<SidechatTab>;
+  onSelectSidechat: (sidechatThreadId: ThreadId | null) => void;
   onSpawnSidechat: () => void;
   spawnDisabled: boolean;
 }
@@ -35,37 +35,17 @@ type SidechatTabContextMenuAction =
   | "delete";
 
 /**
- * Tab strip above the chat: a Main tab for the routed thread plus one tab per
+ * Tab strip at the top of the right panel's sidechat surface: one tab per
  * live sidechat. Renders nothing while the thread has no sidechats, so the
- * common case pays no layout cost.
+ * surface's empty state can take over.
  */
 export function SidechatTabBar(props: SidechatTabBarProps) {
-  const { parentThreadRef, activeSidechatId, onSelectMain, onSelectSidechat, onSpawnSidechat } =
-    props;
+  const { parentThreadRef, activeSidechatId, openTabs, closedTabs, onSelectSidechat } = props;
   const tabListRef = useRef<HTMLDivElement>(null);
-  const threadShells = useThreadShells();
-  const tabsState = useSidechatStore(
-    useShallow((state) => selectParentSidechatTabsState(state.byParentThreadKey, parentThreadRef)),
-  );
-  const promotedThreadKeys = useSidechatStore((state) => state.promotedThreadKeys);
   const closeSidechatTab = useSidechatStore((state) => state.closeSidechatTab);
   const reopenSidechatTab = useSidechatStore((state) => state.reopenSidechatTab);
   const promoteSidechat = useSidechatStore((state) => state.promoteSidechat);
   const { confirmAndDeleteThread } = useThreadActions();
-
-  const sidechats = useMemo(
-    () =>
-      threadShells.filter(
-        (thread) =>
-          thread.environmentId === parentThreadRef.environmentId &&
-          thread.parentThreadId === parentThreadRef.threadId,
-      ),
-    [parentThreadRef.environmentId, parentThreadRef.threadId, threadShells],
-  );
-  const { openTabs, closedTabs } = useMemo(
-    () => resolveSidechatTabs({ sidechats, tabsState, promotedThreadKeys }),
-    [promotedThreadKeys, sidechats, tabsState],
-  );
 
   const selectFallbackAfterHide = useCallback(
     (hiddenId: ThreadId) => {
@@ -73,13 +53,9 @@ export function SidechatTabBar(props: SidechatTabBarProps) {
       const remaining = openTabs.filter((tab) => tab.id !== hiddenId);
       const hiddenIndex = openTabs.findIndex((tab) => tab.id === hiddenId);
       const fallback = remaining[Math.min(Math.max(hiddenIndex - 1, 0), remaining.length - 1)];
-      if (fallback) {
-        onSelectSidechat(fallback.id);
-      } else {
-        onSelectMain();
-      }
+      onSelectSidechat(fallback?.id ?? null);
     },
-    [activeSidechatId, onSelectMain, onSelectSidechat, openTabs],
+    [activeSidechatId, onSelectSidechat, openTabs],
   );
 
   const closeTab = useCallback(
@@ -202,19 +178,6 @@ export function SidechatTabBar(props: SidechatTabBarProps) {
         data-sidechat-tab-list
       >
         <div className="flex h-full w-max min-w-full items-center gap-1">
-          <button
-            type="button"
-            data-active-tab={activeSidechatId === null}
-            onClick={onSelectMain}
-            className={cn(
-              "flex h-7 shrink-0 items-center gap-1.5 rounded-md px-2 text-sm",
-              activeSidechatId === null
-                ? "bg-accent text-foreground"
-                : "text-muted-foreground hover:bg-accent/60 hover:text-foreground",
-            )}
-          >
-            Main
-          </button>
           {openTabs.map((tab) => {
             const active = tab.id === activeSidechatId;
             return (
@@ -284,7 +247,7 @@ export function SidechatTabBar(props: SidechatTabBarProps) {
                   className="relative inline-flex size-7 shrink-0 items-center justify-center rounded-md text-muted-foreground hover:bg-accent hover:text-foreground disabled:pointer-events-none disabled:opacity-40"
                   aria-label="New sidechat"
                   disabled={props.spawnDisabled}
-                  onClick={onSpawnSidechat}
+                  onClick={props.onSpawnSidechat}
                 >
                   <Plus className="size-4" />
                 </button>

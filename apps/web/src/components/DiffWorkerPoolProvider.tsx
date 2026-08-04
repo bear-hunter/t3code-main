@@ -46,6 +46,9 @@ function DiffWorkerThemeSync({ themeName }: { themeName: DiffThemeName }) {
 }
 
 export function DiffWorkerPoolProvider({ children }: { children?: ReactNode }) {
+  // An embedded ChatView renders inside an already-provided pool; nesting a
+  // second provider would spawn a duplicate worker pool.
+  const existingWorkerPool = useWorkerPool();
   const { resolvedTheme } = useTheme();
   const diffThemeName = resolveDiffThemeName(resolvedTheme);
   const workerPoolSize = useMemo(() => {
@@ -53,6 +56,10 @@ export function DiffWorkerPoolProvider({ children }: { children?: ReactNode }) {
       typeof navigator === "undefined" ? 4 : Math.max(1, navigator.hardwareConcurrency || 4);
     return Math.max(2, Math.min(6, Math.floor(cores / 2)));
   }, []);
+
+  if (existingWorkerPool) {
+    return <>{children}</>;
+  }
 
   return (
     <WorkerPoolContextProvider
