@@ -2560,6 +2560,20 @@ function ChatViewContent(props: ChatViewProps) {
       }
     }
 
+    // Checkpoint-less turns (non-git projects, missing diffs) still revert by
+    // user-message ordinal: keeping K turns rewinds the conversation to just
+    // before the K+1th user message, with no filesystem restore involved.
+    let userMessageOrdinal = 0;
+    for (const entry of timelineEntries) {
+      if (entry.kind !== "message" || entry.message.role !== "user") {
+        continue;
+      }
+      if (!byUserMessageId.has(entry.message.id)) {
+        byUserMessageId.set(entry.message.id, userMessageOrdinal);
+      }
+      userMessageOrdinal += 1;
+    }
+
     return byUserMessageId;
   }, [inferredCheckpointTurnCountByTurnId, timelineEntries, turnDiffSummaryByAssistantMessageId]);
 

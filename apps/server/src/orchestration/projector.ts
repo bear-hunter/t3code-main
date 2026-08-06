@@ -686,6 +686,22 @@ export function projectEvent(
             .toSorted((left, right) => left.checkpointTurnCount - right.checkpointTurnCount)
             .slice(-MAX_THREAD_CHECKPOINTS);
           const retainedTurnIds = new Set(checkpoints.map((checkpoint) => checkpoint.turnId));
+          // Turns without checkpoints (non-git projects) truncate by turn
+          // order instead: retain the first turnCount distinct turns seen in
+          // the message stream.
+          if (checkpoints.length < payload.turnCount) {
+            const seenTurnIds = new Set<string>();
+            for (const message of thread.messages) {
+              if (message.turnId === null || seenTurnIds.has(message.turnId)) {
+                continue;
+              }
+              seenTurnIds.add(message.turnId);
+              if (seenTurnIds.size > payload.turnCount) {
+                break;
+              }
+              retainedTurnIds.add(message.turnId);
+            }
+          }
           const messages = retainThreadMessagesAfterRevert(
             thread.messages,
             retainedTurnIds,
