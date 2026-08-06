@@ -7,6 +7,7 @@ import {
   type OrchestrationEvent,
 } from "@t3tools/contracts";
 import * as Effect from "effect/Effect";
+import { it as effectIt } from "@effect/vitest";
 import { describe, expect, it } from "vite-plus/test";
 
 import { createEmptyReadModel, projectEvent } from "./projector.ts";
@@ -704,6 +705,92 @@ describe("orchestration projector", () => {
     expect(thread?.checkpoints.map((checkpoint) => checkpoint.checkpointTurnCount)).toEqual([1]);
     expect(thread?.latestTurn?.turnId).toBe("turn-1");
   });
+
+  effectIt.effect("truncates checkpoint-less threads by turn order on revert", () =>
+    Effect.gen(function* () {
+      const createdAt = "2026-02-23T10:00:00.000Z";
+      const model = createEmptyReadModel(createdAt);
+
+      const createEvent = makeEvent({
+        sequence: 1,
+        type: "thread.created",
+        aggregateKind: "thread",
+        aggregateId: "thread-1",
+        occurredAt: createdAt,
+        commandId: "cmd-create",
+        payload: {
+          threadId: "thread-1",
+          projectId: "project-1",
+          title: "demo",
+          modelSelection: {
+            provider: ProviderDriverKind.make("codex"),
+            model: "gpt-5.3-codex",
+          },
+          runtimeMode: "full-access",
+          branch: null,
+          worktreePath: null,
+          createdAt,
+          updatedAt: createdAt,
+        },
+      });
+
+      const messageEvents = [
+        { messageId: "user-msg-1", role: "user", text: "First edit", turnId: null },
+        { messageId: "assistant-msg-1", role: "assistant", text: "Done first.", turnId: "turn-1" },
+        { messageId: "user-msg-2", role: "user", text: "Second edit", turnId: null },
+        { messageId: "assistant-msg-2", role: "assistant", text: "Done second.", turnId: "turn-2" },
+      ] as const;
+      const events: ReadonlyArray<OrchestrationEvent> = [
+        createEvent,
+        ...messageEvents.map((message, index) =>
+          makeEvent({
+            sequence: 2 + index,
+            type: "thread.message-sent",
+            aggregateKind: "thread",
+            aggregateId: "thread-1",
+            occurredAt: `2026-02-23T10:00:0${1 + index}.000Z`,
+            commandId: `cmd-${message.messageId}`,
+            payload: {
+              threadId: "thread-1",
+              messageId: message.messageId,
+              role: message.role,
+              text: message.text,
+              turnId: message.turnId,
+              streaming: false,
+              createdAt: `2026-02-23T10:00:0${1 + index}.000Z`,
+              updatedAt: `2026-02-23T10:00:0${1 + index}.000Z`,
+            },
+          }),
+        ),
+        makeEvent({
+          sequence: 6,
+          type: "thread.reverted",
+          aggregateKind: "thread",
+          aggregateId: "thread-1",
+          occurredAt: "2026-02-23T10:00:05.000Z",
+          commandId: "cmd-revert",
+          payload: {
+            threadId: "thread-1",
+            turnCount: 1,
+          },
+        }),
+      ];
+
+      let afterRevert = model;
+      for (const event of events) {
+        afterRevert = yield* projectEvent(afterRevert, event);
+      }
+
+      const thread = afterRevert.threads[0];
+      expect(
+        thread?.messages.map((message) => ({ role: message.role, text: message.text })),
+      ).toEqual([
+        { role: "user", text: "First edit" },
+        { role: "assistant", text: "Done first." },
+      ]);
+      expect(thread?.checkpoints).toEqual([]);
+    }),
+  );
 
   it("does not fallback-retain messages tied to removed turn IDs", async () => {
     const createdAt = "2026-02-26T12:00:00.000Z";

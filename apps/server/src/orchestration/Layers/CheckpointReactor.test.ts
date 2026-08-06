@@ -28,6 +28,7 @@ import * as ManagedRuntime from "effect/ManagedRuntime";
 import * as PubSub from "effect/PubSub";
 import * as Scope from "effect/Scope";
 import * as Stream from "effect/Stream";
+import { it as effectIt } from "@effect/vitest";
 import { afterEach, describe, expect, it, vi } from "vite-plus/test";
 
 import * as CheckpointStore from "../../checkpointing/CheckpointStore.ts";
@@ -150,12 +151,14 @@ async function waitForThread(
       readonly latestTurn: { readonly turnId: string } | null;
       readonly checkpoints: ReadonlyArray<{ readonly checkpointTurnCount: number }>;
       readonly activities: ReadonlyArray<{ readonly kind: string }>;
+      readonly messages: ReadonlyArray<{ readonly role: string; readonly text: string }>;
     }>;
   }>,
   predicate: (thread: {
     latestTurn: { turnId: string } | null;
     checkpoints: ReadonlyArray<{ checkpointTurnCount: number }>;
     activities: ReadonlyArray<{ kind: string }>;
+    messages: ReadonlyArray<{ role: string; text: string }>;
   }) => boolean,
   timeoutMs = 15_000,
 ) {
@@ -164,6 +167,7 @@ async function waitForThread(
     latestTurn: { turnId: string } | null;
     checkpoints: ReadonlyArray<{ checkpointTurnCount: number }>;
     activities: ReadonlyArray<{ kind: string }>;
+    messages: ReadonlyArray<{ role: string; text: string }>;
   }> => {
     const snapshot = await readModel();
     const thread = snapshot.threads.find((entry) => entry.id === ThreadId.make("thread-1"));
@@ -1231,6 +1235,69 @@ describe("CheckpointReactor", () => {
       numTurns: 1,
     });
   });
+
+  effectIt.effect(
+    "reverts the conversation without filesystem steps when the workspace is not a git repository",
+    () =>
+      Effect.gen(function* () {
+        const plainDir = NodeFS.mkdtempSync(NodePath.join(NodeOS.tmpdir(), "t3-checkpoint-plain-"));
+        tempDirs.push(plainDir);
+        const harness = yield* Effect.promise(() =>
+          createHarness({
+            projectWorkspaceRoot: plainDir,
+            threadWorktreePath: plainDir,
+            providerSessionCwd: plainDir,
+          }),
+        );
+        const createdAt = "2026-01-01T00:00:00.000Z";
+
+        for (const [index, text] of ["first", "second"].entries()) {
+          yield* harness.engine.dispatch({
+            type: "thread.turn.start",
+            commandId: CommandId.make(`cmd-turn-start-plain-${index}`),
+            threadId: ThreadId.make("thread-1"),
+            message: {
+              messageId: MessageId.make(`msg-plain-${index}`),
+              role: "user",
+              text,
+              attachments: [],
+            },
+            interactionMode: DEFAULT_PROVIDER_INTERACTION_MODE,
+            runtimeMode: "approval-required",
+            createdAt,
+          });
+        }
+
+        yield* harness.engine.dispatch({
+          type: "thread.checkpoint.revert",
+          commandId: CommandId.make("cmd-revert-plain"),
+          threadId: ThreadId.make("thread-1"),
+          turnCount: 1,
+          createdAt,
+        });
+
+        yield* Effect.promise(() =>
+          waitForEvent(harness.engine, (event) => event.type === "thread.reverted"),
+        );
+        const thread = yield* Effect.promise(() =>
+          waitForThread(
+            harness.readModel,
+            (entry) => entry.messages.filter((message) => message.role === "user").length === 1,
+          ),
+        );
+
+        expect(thread.messages.filter((message) => message.role === "user")).toHaveLength(1);
+        expect(thread.messages[0]?.text).toBe("first");
+        expect(
+          thread.activities.some((activity) => activity.kind === "checkpoint.revert.failed"),
+        ).toBe(false);
+        expect(harness.provider.rollbackConversation).toHaveBeenCalledTimes(1);
+        expect(harness.provider.rollbackConversation).toHaveBeenCalledWith({
+          threadId: ThreadId.make("thread-1"),
+          numTurns: 1,
+        });
+      }),
+  );
 
   it("appends an error activity when revert is requested without an active session", async () => {
     const harness = await createHarness({ hasSession: false });
